@@ -1,0 +1,6 @@
+{
+  "name": "Checkers Online",
+  "description": "Online multiplayer checkers game with real-time matchmaking, online presence, custom profile avatars, strict digit-free username validation, and live game rooms.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
