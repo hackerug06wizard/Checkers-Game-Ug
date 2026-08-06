@@ -262,6 +262,9 @@ export default function App() {
       existingUserId: userProfile.id,
     });
     setIsAuthModalOpen(false);
+    if (typeof window !== 'undefined' && window.screen && (window.screen as any).orientation?.lock) {
+      (window.screen as any).orientation.lock('landscape').catch(() => {});
+    }
     showNotification(`Welcome to Checkers Arena, ${userProfile.username}!`);
   };
 

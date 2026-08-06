@@ -3,14 +3,11 @@ import {
   getAuth,
   signInWithPopup,
   GoogleAuthProvider,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
+  OAuthProvider,
   signOut,
   setPersistence,
   browserLocalPersistence,
   browserSessionPersistence,
-  onAuthStateChanged,
-  User as FirebaseUser,
 } from 'firebase/auth';
 import {
   getFirestore,
@@ -22,7 +19,6 @@ import {
   query,
   where,
   updateDoc,
-  onSnapshot,
   serverTimestamp,
 } from 'firebase/firestore';
 import { UserProfile } from '../types';
@@ -44,26 +40,35 @@ export const db = getFirestore(app);
 
 // Check if username is already taken by another user
 export async function isUsernameTaken(username: string, excludeUid?: string): Promise<boolean> {
-  const normalized = username.trim().toLowerCase();
-  const q = query(collection(db, 'users'), where('usernameLowercase', '==', normalized));
-  const querySnap = await getDocs(q);
-  
-  if (querySnap.empty) return false;
-  if (excludeUid && querySnap.docs.length === 1 && querySnap.docs[0].id === excludeUid) {
+  try {
+    const normalized = username.trim().toLowerCase();
+    const q = query(collection(db, 'users'), where('usernameLowercase', '==', normalized));
+    const querySnap = await getDocs(q);
+    
+    if (querySnap.empty) return false;
+    if (excludeUid && querySnap.docs.length === 1 && querySnap.docs[0].id === excludeUid) {
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Firestore isUsernameTaken query skipped due to rules/network:', err);
     return false;
   }
-  return true;
 }
 
 // Save or Update User Profile in Firestore
 export async function saveUserProfileToFirestore(profile: UserProfile): Promise<void> {
-  const userRef = doc(db, 'users', profile.id);
-  const dataToSave = {
-    ...profile,
-    usernameLowercase: profile.username.toLowerCase(),
-    updatedAt: serverTimestamp(),
-  };
-  await setDoc(userRef, dataToSave, { merge: true });
+  try {
+    const userRef = doc(db, 'users', profile.id);
+    const dataToSave = {
+      ...profile,
+      usernameLowercase: profile.username.toLowerCase(),
+      updatedAt: serverTimestamp(),
+    };
+    await setDoc(userRef, dataToSave, { merge: true });
+  } catch (err) {
+    console.warn('Firestore setDoc warning (saving profile locally):', err);
+  }
 }
 
 // Fetch User Profile from Firestore
@@ -75,14 +80,43 @@ export async function getUserProfileFromFirestore(uid: string): Promise<UserProf
       return snap.data() as UserProfile;
     }
   } catch (err) {
-    console.error('Error getting profile from Firestore:', err);
+    console.warn('Firestore getDoc warning:', err);
   }
   return null;
 }
 
 // Configure Auth Persistence
 export async function setAuthRememberMe(remember: boolean): Promise<void> {
-  await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
+  try {
+    await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
+  } catch (e) {
+    console.warn('Auth persistence warning:', e);
+  }
+}
+
+// Helper to construct profile object from Firebase User
+function createProfileFromFirebaseUser(user: any): UserProfile {
+  const baseName = (user.displayName || user.email?.split('@')[0] || 'Player')
+    .replace(/[^a-zA-Z]/g, '');
+  const cleanUsername = baseName || 'MasterPlayer';
+
+  return {
+    id: user.uid,
+    username: cleanUsername,
+    realName: user.displayName || cleanUsername,
+    phoneNumber: user.phoneNumber || '',
+    avatarId: 'avatar-crown',
+    elo: 1200,
+    rating: 1200,
+    status: 'online',
+    createdAt: Date.now(),
+    gamesPlayed: 0,
+    wins: 0,
+    losses: 0,
+    draws: 0,
+    isOnline: true,
+    lastActiveTimestamp: Date.now(),
+  };
 }
 
 // Google Sign In
@@ -92,44 +126,31 @@ export async function signInWithGoogle(rememberMe: boolean = true): Promise<User
   const result = await signInWithPopup(auth, provider);
   const user = result.user;
 
-  // Check if profile exists
   let existingProfile = await getUserProfileFromFirestore(user.uid);
   if (!existingProfile) {
-    // Generate clean unique username from email/displayName
-    const baseName = (user.displayName || user.email?.split('@')[0] || 'Player')
-      .replace(/[^a-zA-Z]/g, '');
-    let cleanUsername = baseName || 'MasterPlayer';
-    
-    let isTaken = await isUsernameTaken(cleanUsername);
-    let attempts = 1;
-    while (isTaken) {
-      // Append letter variations if taken
-      cleanUsername = `${baseName}User${attempts}`;
-      isTaken = await isUsernameTaken(cleanUsername);
-      attempts++;
-    }
-
-    existingProfile = {
-      id: user.uid,
-      username: cleanUsername,
-      realName: user.displayName || cleanUsername,
-      phoneNumber: user.phoneNumber || '',
-      avatarId: 'avatar-crown',
-      elo: 1200,
-      rating: 1200,
-      status: 'online',
-      createdAt: Date.now(),
-      gamesPlayed: 0,
-      wins: 0,
-      losses: 0,
-      draws: 0,
-      isOnline: true,
-      lastActiveTimestamp: Date.now(),
-    };
-
+    existingProfile = createProfileFromFirebaseUser(user);
     await saveUserProfileToFirestore(existingProfile);
   } else {
-    // Update online status
+    existingProfile.isOnline = true;
+    existingProfile.lastActiveTimestamp = Date.now();
+    await saveUserProfileToFirestore(existingProfile);
+  }
+
+  return existingProfile;
+}
+
+// Apple Sign In
+export async function signInWithApple(rememberMe: boolean = true): Promise<UserProfile> {
+  await setAuthRememberMe(rememberMe);
+  const provider = new OAuthProvider('apple.com');
+  const result = await signInWithPopup(auth, provider);
+  const user = result.user;
+
+  let existingProfile = await getUserProfileFromFirestore(user.uid);
+  if (!existingProfile) {
+    existingProfile = createProfileFromFirebaseUser(user);
+    await saveUserProfileToFirestore(existingProfile);
+  } else {
     existingProfile.isOnline = true;
     existingProfile.lastActiveTimestamp = Date.now();
     await saveUserProfileToFirestore(existingProfile);

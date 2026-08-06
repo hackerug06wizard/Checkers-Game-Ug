@@ -42,6 +42,13 @@ export const GameRoom: React.FC<GameRoomProps> = ({
   const [chatText, setChatText] = useState('');
   const [timeLeft, setTimeLeft] = useState<number>(room.turnTimeLimitSeconds);
 
+  // Auto request landscape orientation on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.screen && (window.screen as any).orientation?.lock) {
+      (window.screen as any).orientation.lock('landscape').catch(() => {});
+    }
+  }, []);
+
   // Determine current player's color
   const isRed = room.redPlayer?.id === currentUser.id;
   const isBlack = room.blackPlayer?.id === currentUser.id;
