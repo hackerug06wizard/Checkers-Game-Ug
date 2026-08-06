@@ -1,0 +1,22 @@
+{
+  "short_name": "Checkers",
+  "name": "Checkers Online - Android App",
+  "description": "Real-time multiplayer checkers game with AI bot, online matchmaking, and landscape mobile orientation.",
+  "icons": [
+    {
+      "src": "https://images.unsplash.com/photo-1611195974226-a6a9be9dd763?w=192&auto=format&fit=crop&q=80",
+      "type": "image/jpeg",
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://images.unsplash.com/photo-1611195974226-a6a9be9dd763?w=512&auto=format&fit=crop&q=80",
+      "type": "image/jpeg",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "display": "standalone",
+  "orientation": "any"
+}
