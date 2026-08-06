@@ -10,6 +10,97 @@
     <link rel="manifest" href="/manifest.json" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23f59e0b'><circle cx='12' cy='12' r='10'/></svg>" />
     <title>Checkers Online - Android App</title>
+    <script>
+      (function() {
+        function safeFn() {}
+        function safeNoop() { return false; }
+
+        if (typeof window.process === 'undefined') {
+          window.process = { env: {} };
+        }
+        var p = window.process;
+        p.emit = p.emit || safeNoop;
+        p.on = p.on || safeFn;
+        p.once = p.once || safeFn;
+        p.off = p.off || safeFn;
+        p.addListener = p.addListener || safeFn;
+        p.removeListener = p.removeListener || safeFn;
+        p.removeAllListeners = p.removeAllListeners || safeFn;
+
+        if (!window.addListener) window.addListener = window.addEventListener ? window.addEventListener.bind(window) : safeFn;
+        if (!window.removeListener) window.removeListener = window.removeEventListener ? window.removeEventListener.bind(window) : safeFn;
+        if (!window.emit) window.emit = safeNoop;
+
+        if (typeof document !== 'undefined') {
+          if (!document.addListener) document.addListener = document.addEventListener ? document.addEventListener.bind(document) : safeFn;
+          if (!document.removeListener) document.removeListener = document.removeEventListener ? document.removeEventListener.bind(document) : safeFn;
+          if (!document.emit) document.emit = safeNoop;
+        }
+
+        var origMatchMedia = window.matchMedia;
+        window.matchMedia = function(q) {
+          var m = null;
+          try {
+            m = origMatchMedia ? origMatchMedia.call(window, q) : null;
+          } catch(e) {}
+          if (!m) {
+            m = {
+              matches: false,
+              media: q,
+              onchange: null,
+              dispatchEvent: safeNoop
+            };
+          }
+          m.addListener = m.addListener || m.addEventListener || safeFn;
+          m.removeListener = m.removeListener || m.removeEventListener || safeFn;
+          m.addEventListener = m.addEventListener || m.addListener || safeFn;
+          m.removeEventListener = m.removeEventListener || m.removeListener || safeFn;
+          m.emit = m.emit || safeNoop;
+          return m;
+        };
+
+        if (!window.screen) window.screen = {};
+        var sc = window.screen;
+        if (!sc.orientation) {
+          sc.orientation = {
+            type: 'landscape-primary',
+            angle: 0,
+            lock: function() { return Promise.resolve(); },
+            unlock: safeFn,
+            onchange: null
+          };
+        }
+        var so = sc.orientation;
+        so.addListener = so.addListener || so.addEventListener || safeFn;
+        so.removeListener = so.removeListener || so.removeEventListener || safeFn;
+        so.addEventListener = so.addEventListener || so.addListener || safeFn;
+        so.removeEventListener = so.removeEventListener || so.removeListener || safeFn;
+        so.emit = so.emit || safeNoop;
+        if (!so.lock) so.lock = function() { return Promise.resolve(); };
+        if (!so.unlock) so.unlock = safeFn;
+
+        // Catch and handle Database is closing / hidden / IndexedDB teardown errors gracefully
+        window.addEventListener('unhandledrejection', function(event) {
+          if (event && event.reason) {
+            var msg = (event.reason.message || event.reason.name || String(event.reason)).toLowerCase();
+            if (msg.includes('database') || msg.includes('closing') || msg.includes('hidden') || msg.includes('indexeddb')) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }
+        });
+
+        window.addEventListener('error', function(event) {
+          if (event && (event.message || event.error)) {
+            var msg = (event.message || (event.error && event.error.message) || '').toLowerCase();
+            if (msg.includes('database') || msg.includes('closing') || msg.includes('hidden') || msg.includes('indexeddb')) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }
+        });
+      })();
+    </script>
   </head>
   <body class="h-full bg-slate-950 text-slate-100 overflow-x-hidden antialiased selection:bg-amber-500 selection:text-slate-950">
     <div id="root" class="h-full"></div>

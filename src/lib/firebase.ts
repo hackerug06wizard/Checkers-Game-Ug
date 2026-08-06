@@ -11,6 +11,8 @@ import {
 } from 'firebase/auth';
 import {
   getFirestore,
+  initializeFirestore,
+  memoryLocalCache,
   doc,
   setDoc,
   getDoc,
@@ -36,7 +38,16 @@ export const firebaseConfig = {
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+
+let firestoreDb: any;
+try {
+  firestoreDb = initializeFirestore(app, {
+    localCache: memoryLocalCache(),
+  });
+} catch (e) {
+  firestoreDb = getFirestore(app);
+}
+export const db = firestoreDb;
 
 // Check if username is already taken by another user
 export async function isUsernameTaken(username: string, excludeUid?: string): Promise<boolean> {
