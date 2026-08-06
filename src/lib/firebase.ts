@@ -27,14 +27,14 @@ import {
 } from 'firebase/firestore';
 import { UserProfile } from '../types';
 
-// Web App's Firebase Configuration provided by user
+// Web App's Firebase Configuration (read from environment variables or fallback to defaults)
 export const firebaseConfig = {
-  apiKey: "AIzaSyCEzDbBHKvmL0qg19CnvCCRZsYwx03NlTc",
-  authDomain: "checkers-game-ug.firebaseapp.com",
-  projectId: "checkers-game-ug",
-  storageBucket: "checkers-game-ug.firebasestorage.app",
-  messagingSenderId: "726155928996",
-  appId: "1:726155928996:web:4e4cd4d3160e2fd5514d31"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCEzDbBHKvmL0qg19CnvCCRZsYwx03NlTc",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "checkers-game-ug.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "checkers-game-ug",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "checkers-game-ug.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "726155928996",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:726155928996:web:4e4cd4d3160e2fd5514d31"
 };
 
 // Initialize Firebase App

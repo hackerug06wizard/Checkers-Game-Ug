@@ -40,36 +40,92 @@ export default function App() {
 
   // Initialize WebSocket connection
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}`;
-    const socket = new WebSocket(wsUrl);
-    wsRef.current = socket;
+    let wsUrl: string;
+    if (import.meta.env.VITE_WS_URL) {
+      wsUrl = import.meta.env.VITE_WS_URL;
+    } else if (
+      typeof window !== 'undefined' &&
+      (window.location.hostname.includes('netlify') ||
+        window.location.hostname.includes('vercel') ||
+        window.location.hostname.includes('github.io'))
+    ) {
+      // Automatic live cloud server endpoint for Netlify/external static deployments
+      wsUrl = 'wss://ais-pre-6jl5ztzyfigu5rh4loi7rf-490075589647.europe-west2.run.app';
+    } else {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      wsUrl = `${protocol}//${window.location.host}`;
+    }
 
-    socket.onopen = () => {
-      console.log('Connected to Checkers Arena server.');
-
-      // Check for saved local session
+    // Safety timeout: if server response is slow, open Auth modal so user isn't frozen
+    const connectTimeout = setTimeout(() => {
       const savedUserRaw = localStorage.getItem('checkers_user_profile');
       if (savedUserRaw) {
         try {
           const savedUser = JSON.parse(savedUserRaw);
-          socket.send(
-            JSON.stringify({
-              type: 'auth:login',
-              payload: {
-                username: savedUser.username,
-                avatarId: savedUser.avatarId,
-                existingUserId: savedUser.id,
-              },
-            })
-          );
+          setCurrentUser(savedUser);
         } catch (e) {
           setIsAuthModalOpen(true);
         }
       } else {
         setIsAuthModalOpen(true);
       }
-    };
+    }, 2500);
+
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(wsUrl);
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        console.log('Connected to Checkers Arena server.');
+        clearTimeout(connectTimeout);
+
+        // Check for saved local session
+        const savedUserRaw = localStorage.getItem('checkers_user_profile');
+        if (savedUserRaw) {
+          try {
+            const savedUser = JSON.parse(savedUserRaw);
+            setCurrentUser(savedUser);
+            socket.send(
+              JSON.stringify({
+                type: 'auth:login',
+                payload: {
+                  username: savedUser.username,
+                  avatarId: savedUser.avatarId,
+                  existingUserId: savedUser.id,
+                },
+              })
+            );
+          } catch (e) {
+            setIsAuthModalOpen(true);
+          }
+        } else {
+          setIsAuthModalOpen(true);
+        }
+      };
+
+      socket.onerror = (err) => {
+        console.warn('WebSocket connection error:', err);
+        clearTimeout(connectTimeout);
+        const savedUserRaw = localStorage.getItem('checkers_user_profile');
+        if (savedUserRaw) {
+          try {
+            setCurrentUser(JSON.parse(savedUserRaw));
+          } catch (e) {
+            setIsAuthModalOpen(true);
+          }
+        } else {
+          setIsAuthModalOpen(true);
+        }
+      };
+
+      socket.onclose = () => {
+        console.log('WebSocket connection closed.');
+      };
+    } catch (e) {
+      console.error('Failed to construct WebSocket:', e);
+      setIsAuthModalOpen(true);
+    }
 
     socket.onmessage = (event) => {
       try {
@@ -317,12 +373,47 @@ export default function App() {
             onOpenLeaderboard={handleOpenLeaderboard}
           />
         ) : (
-          <div className="flex items-center justify-center min-h-[70vh]">
-            <div className="text-center space-y-4">
-              <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto" />
-              <p className="text-slate-400 font-semibold text-sm">
-                Connecting to Checkers Arena server...
-              </p>
+          <div className="flex items-center justify-center min-h-[70vh] px-4">
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 max-w-md w-full text-center space-y-6 shadow-2xl">
+              <div className="w-16 h-16 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto" />
+              
+              <div className="space-y-2">
+                <h2 className="text-xl font-black text-white">Connecting to Checkers Arena</h2>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Initializing real-time game server and account syncing. Please log in or create an account to start playing!
+                </p>
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAuthModalOpen(true)}
+                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 via-amber-400 to-red-500 hover:from-amber-400 hover:to-red-400 text-slate-950 font-black text-sm shadow-xl shadow-amber-950/30 transition transform active:scale-95"
+                >
+                  Create Account / Log In
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const guestUser: UserProfile = {
+                      id: 'guest_' + Math.random().toString(36).substr(2, 9),
+                      username: 'GuestPlayer',
+                      avatarId: 'avatar-crown',
+                      wins: 0,
+                      losses: 0,
+                      draws: 0,
+                      rating: 1200,
+                      status: 'online',
+                      createdAt: Date.now(),
+                    };
+                    setCurrentUser(guestUser);
+                  }}
+                  className="w-full py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition"
+                >
+                  Continue as Guest
+                </button>
+              </div>
             </div>
           </div>
         )}
