@@ -80,7 +80,7 @@ export const CheckersBoard: React.FC<CheckersBoardProps> = ({
   };
 
   return (
-    <div className="w-[80vw] sm:w-[80vw] max-w-[80vh] h-[80vw] max-h-[80vh] aspect-square mx-auto bg-slate-950 p-2 sm:p-3.5 rounded-3xl border-4 border-amber-950/80 shadow-2xl shadow-black/80 flex flex-col justify-between select-none transition-all duration-300">
+    <div className="w-[90vw] max-w-[88vh] h-[90vw] max-h-[88vh] aspect-square mx-auto bg-slate-950 p-2 sm:p-3 rounded-3xl border-4 border-amber-950/80 shadow-2xl shadow-black/80 flex flex-col justify-between select-none transition-all duration-300">
       {/* 8x8 Grid Container */}
       <div className="w-full h-full grid grid-cols-8 grid-rows-8 rounded-2xl overflow-hidden border-2 border-amber-900/40 relative shadow-inner">
         {Array.from({ length: 8 }).map((_, displayR) => {

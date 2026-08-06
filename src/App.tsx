@@ -45,197 +45,187 @@ export default function App() {
 
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Initialize WebSocket connection
+  // Initialize WebSocket connection with automatic reconnect
   useEffect(() => {
-    let wsUrl: string;
-    if (import.meta.env.VITE_WS_URL) {
-      wsUrl = import.meta.env.VITE_WS_URL;
-    } else if (
-      typeof window !== 'undefined' &&
-      (window.location.hostname.includes('netlify') ||
-        window.location.hostname.includes('vercel') ||
-        window.location.hostname.includes('github.io'))
-    ) {
-      // Automatic live cloud server endpoint for Netlify/external static deployments
-      wsUrl = 'wss://ais-pre-6jl5ztzyfigu5rh4loi7rf-490075589647.europe-west2.run.app';
-    } else {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      wsUrl = `${protocol}//${window.location.host}`;
-    }
+    let reconnectTimer: any;
+    let socket: WebSocket | null = null;
+    let isDisposed = false;
 
-    // Safety timeout: if server response is slow, open Auth modal so user isn't frozen
-    const connectTimeout = setTimeout(() => {
-      const savedUserRaw = localStorage.getItem('checkers_user_profile');
-      if (savedUserRaw) {
-        try {
-          const savedUser = JSON.parse(savedUserRaw);
-          setCurrentUser(savedUser);
-        } catch (e) {
-          setIsAuthModalOpen(true);
-        }
+    function connect() {
+      if (isDisposed) return;
+
+      let wsUrl: string;
+      if (import.meta.env.VITE_WS_URL) {
+        wsUrl = import.meta.env.VITE_WS_URL;
+      } else if (
+        typeof window !== 'undefined' &&
+        (window.location.hostname.includes('netlify') ||
+          window.location.hostname.includes('vercel') ||
+          window.location.hostname.includes('github.io'))
+      ) {
+        wsUrl = 'wss://ais-dev-6jl5ztzyfigu5rh4loi7rf-490075589647.europe-west2.run.app';
       } else {
-        setIsAuthModalOpen(true);
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsUrl = `${protocol}//${window.location.host}`;
       }
-    }, 2500);
 
-    let socket: WebSocket;
-    try {
-      socket = new WebSocket(wsUrl);
-      wsRef.current = socket;
+      try {
+        socket = new WebSocket(wsUrl);
+        wsRef.current = socket;
 
-      socket.onopen = () => {
-        console.log('Connected to Checkers Arena server.');
-        clearTimeout(connectTimeout);
+        socket.onopen = () => {
+          console.log('Connected to Checkers Arena live server.');
 
-        // Check for saved local session
-        const savedUserRaw = localStorage.getItem('checkers_user_profile');
-        if (savedUserRaw) {
-          try {
-            const savedUser = JSON.parse(savedUserRaw);
-            setCurrentUser(savedUser);
-            socket.send(
-              JSON.stringify({
-                type: 'auth:login',
-                payload: {
-                  username: savedUser.username,
-                  avatarId: savedUser.avatarId,
-                  existingUserId: savedUser.id,
-                },
-              })
-            );
-          } catch (e) {
+          const savedUserRaw = localStorage.getItem('checkers_user_profile');
+          if (savedUserRaw) {
+            try {
+              const savedUser = JSON.parse(savedUserRaw);
+              setCurrentUser(savedUser);
+              socket?.send(
+                JSON.stringify({
+                  type: 'auth:login',
+                  payload: {
+                    username: savedUser.username,
+                    avatarId: savedUser.avatarId,
+                    existingUserId: savedUser.id,
+                  },
+                })
+              );
+            } catch (e) {
+              setIsAuthModalOpen(true);
+            }
+          } else {
             setIsAuthModalOpen(true);
           }
-        } else {
-          setIsAuthModalOpen(true);
-        }
-      };
+        };
 
-      socket.onerror = (err) => {
-        console.warn('WebSocket connection error:', err);
-        clearTimeout(connectTimeout);
-        const savedUserRaw = localStorage.getItem('checkers_user_profile');
-        if (savedUserRaw) {
-          try {
-            setCurrentUser(JSON.parse(savedUserRaw));
-          } catch (e) {
-            setIsAuthModalOpen(true);
+        socket.onerror = (err) => {
+          console.warn('WebSocket error:', err);
+          const savedUserRaw = localStorage.getItem('checkers_user_profile');
+          if (savedUserRaw && !currentUser) {
+            try {
+              setCurrentUser(JSON.parse(savedUserRaw));
+            } catch (e) {
+              setIsAuthModalOpen(true);
+            }
           }
-        } else {
-          setIsAuthModalOpen(true);
-        }
-      };
+        };
 
-      socket.onclose = () => {
-        console.log('WebSocket connection closed.');
-      };
-    } catch (e) {
-      console.error('Failed to construct WebSocket:', e);
-      setIsAuthModalOpen(true);
+        socket.onclose = () => {
+          console.log('WebSocket connection closed. Retrying in 2.5 seconds...');
+          if (!isDisposed) {
+            reconnectTimer = setTimeout(connect, 2500);
+          }
+        };
+
+        socket.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            const { type, payload } = data;
+
+            switch (type) {
+              case 'auth:success': {
+                setCurrentUser(payload.user);
+                localStorage.setItem(
+                  'checkers_user_profile',
+                  JSON.stringify(payload.user)
+                );
+                setIsAuthModalOpen(false);
+                break;
+              }
+
+              case 'auth:error': {
+                showNotification(payload.message, 'error');
+                setIsAuthModalOpen(true);
+                break;
+              }
+
+              case 'user:profile_updated': {
+                setCurrentUser(payload.user);
+                localStorage.setItem(
+                  'checkers_user_profile',
+                  JSON.stringify(payload.user)
+                );
+                showNotification('Profile updated successfully!');
+                break;
+              }
+
+              case 'presence:list': {
+                setOnlineUsers(payload);
+                break;
+              }
+
+              case 'lobby:rooms': {
+                setGameRooms(payload);
+                break;
+              }
+
+              case 'challenge:received': {
+                setIncomingChallenge(payload);
+                sounds.playChallenge();
+                break;
+              }
+
+              case 'challenge:declined': {
+                showNotification(payload.message, 'info');
+                break;
+              }
+
+              case 'game:started':
+              case 'game:joined':
+              case 'game:updated': {
+                setActiveRoom(payload);
+                break;
+              }
+
+              case 'game:invalid_move': {
+                showNotification(payload.message, 'error');
+                break;
+              }
+
+              case 'chat:history': {
+                setLobbyChatMessages(payload);
+                break;
+              }
+
+              case 'chat:lobby_message': {
+                setLobbyChatMessages((prev) => [...prev.slice(-80), payload]);
+                break;
+              }
+
+              case 'chat:game_message': {
+                setGameChatMessages((prev) => [...prev.slice(-80), payload]);
+                break;
+              }
+
+              case 'leaderboard:data': {
+                setLeaderboardEntries(payload);
+                break;
+              }
+
+              case 'error': {
+                showNotification(payload.message, 'error');
+                break;
+              }
+            }
+          } catch (err) {
+            console.error('Error parsing WS message:', err);
+          }
+        };
+      } catch (e) {
+        console.error('Failed to construct WebSocket:', e);
+        if (!isDisposed) {
+          reconnectTimer = setTimeout(connect, 3000);
+        }
+      }
     }
 
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        const { type, payload } = data;
-
-        switch (type) {
-          case 'auth:success': {
-            setCurrentUser(payload.user);
-            localStorage.setItem(
-              'checkers_user_profile',
-              JSON.stringify(payload.user)
-            );
-            setIsAuthModalOpen(false);
-            showNotification(`Welcome to Checkers Arena, ${payload.user.username}!`);
-            break;
-          }
-
-          case 'auth:error': {
-            showNotification(payload.message, 'error');
-            setIsAuthModalOpen(true);
-            break;
-          }
-
-          case 'user:profile_updated': {
-            setCurrentUser(payload.user);
-            localStorage.setItem(
-              'checkers_user_profile',
-              JSON.stringify(payload.user)
-            );
-            showNotification('Profile updated successfully!');
-            break;
-          }
-
-          case 'presence:list': {
-            setOnlineUsers(payload);
-            break;
-          }
-
-          case 'lobby:rooms': {
-            setGameRooms(payload);
-            break;
-          }
-
-          case 'challenge:received': {
-            setIncomingChallenge(payload);
-            sounds.playChallenge();
-            break;
-          }
-
-          case 'challenge:declined': {
-            showNotification(payload.message, 'info');
-            break;
-          }
-
-          case 'game:started':
-          case 'game:joined':
-          case 'game:updated': {
-            setActiveRoom(payload);
-            break;
-          }
-
-          case 'game:invalid_move': {
-            showNotification(payload.message, 'error');
-            break;
-          }
-
-          case 'chat:history': {
-            setLobbyChatMessages(payload);
-            break;
-          }
-
-          case 'chat:lobby_message': {
-            setLobbyChatMessages((prev) => [...prev.slice(-80), payload]);
-            break;
-          }
-
-          case 'chat:game_message': {
-            setGameChatMessages((prev) => [...prev.slice(-80), payload]);
-            break;
-          }
-
-          case 'leaderboard:data': {
-            setLeaderboardEntries(payload);
-            break;
-          }
-
-          case 'error': {
-            showNotification(payload.message, 'error');
-            break;
-          }
-        }
-      } catch (err) {
-        console.error('Error parsing WS message:', err);
-      }
-    };
-
-    socket.onclose = () => {
-      console.log('WS Connection closed. Reconnecting...');
-    };
+    connect();
 
     return () => {
-      socket.close();
+      isDisposed = true;
+      clearTimeout(reconnectTimer);
+      if (socket) socket.close();
     };
   }, []);
 
