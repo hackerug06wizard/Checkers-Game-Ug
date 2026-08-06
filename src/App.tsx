@@ -16,6 +16,7 @@ import { ProfileModal } from './components/ProfileModal';
 import { AndroidInstallModal } from './components/AndroidInstallModal';
 import { AvatarBadge } from './components/AvatarBadge';
 import { sounds } from './lib/sound';
+import { saveUserProfileToFirestore } from './lib/firebase';
 import { Swords, X, Check, Bell } from 'lucide-react';
 
 export default function App() {
@@ -236,7 +237,7 @@ export default function App() {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type, payload }));
     } else {
-      showNotification('Reconnecting to server...', 'error');
+      console.warn(`WebSocket message deferred/skipped (${type}) as server is offline or connecting.`);
     }
   };
 
@@ -320,7 +321,23 @@ export default function App() {
   };
 
   const handleUpdateProfile = (avatarId: string, username?: string) => {
-    sendWs('user:update_profile', { avatarId, username });
+    if (!currentUser) return;
+    const newUsername = username?.trim() || currentUser.username;
+    const updatedUser: UserProfile = {
+      ...currentUser,
+      avatarId,
+      username: newUsername,
+    };
+
+    setCurrentUser(updatedUser);
+    localStorage.setItem('checkers_user_profile', JSON.stringify(updatedUser));
+    saveUserProfileToFirestore(updatedUser).catch((e) => console.warn('Firestore profile save warning:', e));
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      sendWs('user:update_profile', { avatarId, username: newUsername });
+    }
+
+    showNotification('Profile updated successfully!', 'info');
   };
 
   return (
