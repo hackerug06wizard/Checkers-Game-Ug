@@ -71,6 +71,24 @@ export async function saveUserProfileToFirestore(profile: UserProfile): Promise<
   }
 }
 
+// Fetch Top Leaderboard Entries from Firestore
+export async function getLeaderboardFromFirestore(): Promise<UserProfile[]> {
+  try {
+    const usersRef = collection(db, 'users');
+    const snap = await getDocs(usersRef);
+    const list: UserProfile[] = [];
+    snap.forEach((docSnap) => {
+      list.push(docSnap.data() as UserProfile);
+    });
+    // Sort by rating descending
+    list.sort((a, b) => (b.rating || b.elo || 1200) - (a.rating || a.elo || 1200));
+    return list.slice(0, 50);
+  } catch (err) {
+    console.warn('Firestore leaderboard fetch warning:', err);
+    return [];
+  }
+}
+
 // Fetch User Profile from Firestore
 export async function getUserProfileFromFirestore(uid: string): Promise<UserProfile | null> {
   try {

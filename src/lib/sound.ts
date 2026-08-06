@@ -10,6 +10,8 @@ class SoundEffects {
         this.init();
       };
       window.addEventListener('pointerdown', unlock, { passive: true });
+      window.addEventListener('touchstart', unlock, { passive: true });
+      window.addEventListener('click', unlock, { passive: true });
       window.addEventListener('keydown', unlock, { passive: true });
     }
   }
@@ -195,6 +197,32 @@ class SoundEffects {
 
         osc.start(now + idx * 0.1);
         osc.stop(now + idx * 0.1 + 0.15);
+      });
+    } catch (e) {
+      console.warn('Audio error:', e);
+    }
+  }
+
+  public playEmojiSound() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      [450, 680].forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.06);
+
+        gain.gain.setValueAtTime(0.2, now + idx * 0.06);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.06 + 0.12);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(now + idx * 0.06);
+        osc.stop(now + idx * 0.06 + 0.12);
       });
     } catch (e) {
       console.warn('Audio error:', e);

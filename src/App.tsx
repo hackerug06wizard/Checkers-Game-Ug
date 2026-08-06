@@ -16,7 +16,7 @@ import { ProfileModal } from './components/ProfileModal';
 import { AndroidInstallModal } from './components/AndroidInstallModal';
 import { AvatarBadge } from './components/AvatarBadge';
 import { sounds } from './lib/sound';
-import { saveUserProfileToFirestore } from './lib/firebase';
+import { saveUserProfileToFirestore, getLeaderboardFromFirestore } from './lib/firebase';
 import {
   createInitialBoard,
   executeMove,
@@ -279,6 +279,50 @@ export default function App() {
     setIncomingChallenge(null);
   };
 
+  const recordGameOutcome = (userColor: 'red' | 'black', winnerColor: string | null) => {
+    if (!currentUser) return;
+
+    let newWins = currentUser.wins || 0;
+    let newLosses = currentUser.losses || 0;
+    let newDraws = currentUser.draws || 0;
+    let newRating = currentUser.rating || currentUser.elo || 1200;
+
+    if (winnerColor === userColor) {
+      newWins += 1;
+      newRating += 18;
+      sounds.playVictory();
+      showNotification(`Match won! Rating updated to ${newRating} (+18 ELO)`, 'info');
+    } else if (winnerColor === 'draw') {
+      newDraws += 1;
+      newRating += 2;
+      showNotification(`Match drawn! Rating: ${newRating}`, 'info');
+    } else {
+      newLosses += 1;
+      newRating = Math.max(800, newRating - 12);
+      sounds.playDefeat();
+      showNotification(`Match concluded. Rating updated to ${newRating} (-12 ELO)`, 'info');
+    }
+
+    const updatedUser: UserProfile = {
+      ...currentUser,
+      wins: newWins,
+      losses: newLosses,
+      draws: newDraws,
+      rating: newRating,
+      elo: newRating,
+    };
+
+    setCurrentUser(updatedUser);
+    localStorage.setItem('checkers_user_profile', JSON.stringify(updatedUser));
+    saveUserProfileToFirestore(updatedUser).catch((e) => console.warn('Save stats error:', e));
+
+    // Update local leaderboard state instantly
+    setLeaderboardEntries((prev) => {
+      const filtered = prev.filter((u) => u.id !== updatedUser.id);
+      return [...filtered, updatedUser].sort((a, b) => (b.rating || b.elo || 1200) - (a.rating || a.elo || 1200));
+    });
+  };
+
   const triggerBotMove = (room: GameRoom) => {
     setTimeout(() => {
       setActiveRoom((latestRoom) => {
@@ -290,6 +334,7 @@ export default function App() {
         const bestMove = getBestBotMove(latestRoom.board, botColor);
         if (!bestMove) {
           const over = checkGameOver(latestRoom.board, botColor);
+          recordGameOutcome('red', 'red');
           return {
             ...latestRoom,
             status: 'ended',
@@ -311,6 +356,10 @@ export default function App() {
 
         const nextTurn = 'red';
         const over = checkGameOver(newBoard, nextTurn);
+
+        if (over.isOver) {
+          recordGameOutcome('red', over.winner || 'draw');
+        }
 
         return {
           ...latestRoom,
@@ -459,6 +508,10 @@ export default function App() {
       const nextTurn = activeRoom.currentTurn === 'red' ? 'black' : 'red';
       const over = checkGameOver(newBoard, nextTurn);
 
+      if (over.isOver) {
+        recordGameOutcome('red', over.winner || 'draw');
+      }
+
       const updatedRoom: GameRoom = {
         ...activeRoom,
         board: newBoard,
@@ -495,6 +548,8 @@ export default function App() {
     if (!activeRoom) return;
     sendWs('game:resign', { roomId: activeRoom.id });
 
+    recordGameOutcome('red', 'black');
+
     setActiveRoom((prev) => {
       if (!prev) return null;
       const winner = prev.currentTurn === 'red' ? 'black' : 'red';
@@ -513,17 +568,52 @@ export default function App() {
   };
 
   const handleSendLobbyChat = (text: string) => {
+    sounds.playEmojiSound();
     sendWs('chat:send', { text });
+
+    if (currentUser) {
+      const newMsg: ChatMessage = {
+        id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        senderId: currentUser.id,
+        senderName: currentUser.username,
+        avatarId: currentUser.avatarId,
+        text,
+        timestamp: Date.now(),
+      };
+      setLobbyChatMessages((prev) => [...prev.slice(-80), newMsg]);
+    }
   };
 
   const handleSendGameChat = (text: string) => {
     if (!activeRoom) return;
+    sounds.playEmojiSound();
     sendWs('chat:send', { text, roomId: activeRoom.id });
+
+    if (currentUser) {
+      const newMsg: ChatMessage = {
+        id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        senderId: currentUser.id,
+        senderName: currentUser.username,
+        avatarId: currentUser.avatarId,
+        text,
+        timestamp: Date.now(),
+      };
+      setGameChatMessages((prev) => [...prev.slice(-80), newMsg]);
+    }
   };
 
-  const handleOpenLeaderboard = () => {
+  const handleOpenLeaderboard = async () => {
     sendWs('leaderboard:get', {});
     setIsLeaderboardModalOpen(true);
+
+    try {
+      const firestoreEntries = await getLeaderboardFromFirestore();
+      if (firestoreEntries.length > 0) {
+        setLeaderboardEntries(firestoreEntries);
+      }
+    } catch (e) {
+      console.warn('Leaderboard fetch error:', e);
+    }
   };
 
   const handleUpdateProfile = (avatarId: string, username?: string) => {
