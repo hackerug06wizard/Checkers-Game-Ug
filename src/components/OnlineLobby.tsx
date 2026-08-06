@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { UserProfile, GameRoom, ChatMessage } from '../types';
 import { AvatarBadge } from './AvatarBadge';
+import { EmojiChatPanel } from './EmojiChatPanel';
 import {
   Users,
   Swords,
@@ -238,69 +239,13 @@ export const OnlineLobby: React.FC<OnlineLobbyProps> = ({
           </div>
         </div>
 
-        {/* Right Column: Global Arena Chat */}
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 flex flex-col h-[520px] shadow-2xl">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="w-5 h-5 text-amber-400" />
-              <h3 className="text-base font-extrabold text-white">Lobby Chat</h3>
-            </div>
-            <span className="text-[10px] text-slate-500 font-medium">Public Channel</span>
-          </div>
-
-          {/* Chat Messages Log */}
-          <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
-            {chatMessages.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-xs text-slate-500 text-center px-4">
-                No chat messages yet. Say hello to players online!
-              </div>
-            ) : (
-              chatMessages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className="bg-slate-950/70 p-3 rounded-2xl border border-slate-800/80 space-y-1"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5">
-                      <AvatarBadge avatarId={msg.avatarId} size="sm" />
-                      <span className="text-xs font-bold text-amber-300">
-                        {msg.senderName}
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-slate-500">
-                      {new Date(msg.timestamp).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-200 font-normal pl-9 leading-relaxed">
-                    {msg.text}
-                  </p>
-                </div>
-              ))
-            )}
-          </div>
-
-          {/* Chat Input */}
-          <form onSubmit={handleChatSubmit} className="mt-3 flex gap-2 pt-2 border-t border-slate-800">
-            <input
-              type="text"
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              placeholder="Type message..."
-              maxLength={200}
-              className="flex-1 px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-            />
-            <button
-              type="submit"
-              disabled={!chatInput.trim()}
-              className="px-3.5 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold rounded-xl transition"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </form>
-        </div>
+        {/* Right Column: Global Arena Emoji Chat */}
+        <EmojiChatPanel
+          title="Lobby Emoji Chat"
+          messages={chatMessages}
+          onSendEmoji={(emoji) => onSendChatMessage(emoji)}
+          heightClass="h-[520px]"
+        />
       </div>
     </div>
   );

@@ -43,12 +43,19 @@ export interface AvatarOption {
 export interface UserProfile {
   id: string;
   username: string;
+  realName?: string;
+  phoneNumber?: string;
+  termsAccepted?: boolean;
   avatarId: string;
   wins: number;
   losses: number;
   draws: number;
+  gamesPlayed?: number;
   rating: number; // Elo rating, default 1200
+  elo?: number;
   status: 'online' | 'in-game' | 'away';
+  isOnline?: boolean;
+  lastActiveTimestamp?: number;
   createdAt: number;
 }
 

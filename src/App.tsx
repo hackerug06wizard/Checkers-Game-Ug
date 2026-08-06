@@ -197,8 +197,16 @@ export default function App() {
     sounds.setEnabled(next);
   };
 
-  const handleAuthSubmit = (username: string, avatarId: string) => {
-    sendWs('auth:login', { username, avatarId });
+  const handleAuthSuccess = (userProfile: UserProfile) => {
+    setCurrentUser(userProfile);
+    localStorage.setItem('checkers_user_profile', JSON.stringify(userProfile));
+    sendWs('auth:login', {
+      username: userProfile.username,
+      avatarId: userProfile.avatarId,
+      existingUserId: userProfile.id,
+    });
+    setIsAuthModalOpen(false);
+    showNotification(`Welcome to Checkers Arena, ${userProfile.username}!`);
   };
 
   const handleSendChallenge = (targetUserId: string) => {
@@ -323,9 +331,8 @@ export default function App() {
       {/* Modals */}
       <AuthModal
         isOpen={isAuthModalOpen}
-        onSubmitAuth={handleAuthSubmit}
-        initialUsername={currentUser?.username}
-        initialAvatarId={currentUser?.avatarId}
+        onClose={() => setIsAuthModalOpen(false)}
+        onAuthSuccess={handleAuthSuccess}
       />
 
       {currentUser && (
