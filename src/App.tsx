@@ -260,7 +260,11 @@ export default function App() {
     });
     setIsAuthModalOpen(false);
     if (typeof window !== 'undefined' && window.screen && (window.screen as any).orientation?.lock) {
-      (window.screen as any).orientation.lock('landscape').catch(() => {});
+      try {
+        (window.screen as any).orientation.lock('landscape').catch(() => {});
+      } catch (e) {
+        // ignore
+      }
     }
     showNotification(`Welcome to Checkers Arena, ${userProfile.username}!`);
   };

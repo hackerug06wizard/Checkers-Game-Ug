@@ -106,7 +106,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   // Lock orientation to landscape on login/signup success
   const triggerLandscape = () => {
     if (typeof window !== 'undefined' && window.screen && (window.screen as any).orientation?.lock) {
-      (window.screen as any).orientation.lock('landscape').catch(() => {});
+      try {
+        (window.screen as any).orientation.lock('landscape').catch(() => {});
+      } catch (e) {
+        // ignore
+      }
     }
   };
 

@@ -45,7 +45,11 @@ export const GameRoom: React.FC<GameRoomProps> = ({
   // Auto request landscape orientation on mount
   useEffect(() => {
     if (typeof window !== 'undefined' && window.screen && (window.screen as any).orientation?.lock) {
-      (window.screen as any).orientation.lock('landscape').catch(() => {});
+      try {
+        (window.screen as any).orientation.lock('landscape').catch(() => {});
+      } catch (e) {
+        // ignore
+      }
     }
   }, []);
 
