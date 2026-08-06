@@ -17,6 +17,12 @@ import { AndroidInstallModal } from './components/AndroidInstallModal';
 import { AvatarBadge } from './components/AvatarBadge';
 import { sounds } from './lib/sound';
 import { saveUserProfileToFirestore } from './lib/firebase';
+import {
+  createInitialBoard,
+  executeMove,
+  checkGameOver,
+  getBestBotMove,
+} from './lib/checkersEngine';
 import { Swords, X, Check, Bell } from 'lucide-react';
 
 export default function App() {
@@ -283,8 +289,156 @@ export default function App() {
     setIncomingChallenge(null);
   };
 
+  const triggerBotMove = (room: GameRoom) => {
+    setTimeout(() => {
+      setActiveRoom((latestRoom) => {
+        if (!latestRoom || latestRoom.id !== room.id || latestRoom.status !== 'playing') {
+          return latestRoom;
+        }
+
+        const botColor = 'black';
+        const bestMove = getBestBotMove(latestRoom.board, botColor);
+        if (!bestMove) {
+          const over = checkGameOver(latestRoom.board, botColor);
+          return {
+            ...latestRoom,
+            status: 'ended',
+            winner: 'red',
+            winReason: over.reason || 'Bot has no available moves',
+          };
+        }
+
+        const { newBoard, capturedPiece, becameKing } = executeMove(latestRoom.board, bestMove);
+        let capRed = latestRoom.capturedRed;
+        let capBlack = latestRoom.capturedBlack;
+        if (capturedPiece) {
+          if (capturedPiece.color === 'red') capRed++;
+          if (capturedPiece.color === 'black') capBlack++;
+          sounds.playCapture();
+        } else {
+          sounds.playMove();
+        }
+
+        const nextTurn = 'red';
+        const over = checkGameOver(newBoard, nextTurn);
+
+        return {
+          ...latestRoom,
+          board: newBoard,
+          currentTurn: nextTurn,
+          capturedRed: capRed,
+          capturedBlack: capBlack,
+          history: [
+            ...latestRoom.history,
+            {
+              id: `m_${Date.now()}`,
+              playerColor: botColor,
+              from: bestMove.from,
+              to: bestMove.to,
+              capturedCount: bestMove.captures.length,
+              becameKing,
+              timestamp: Date.now(),
+            },
+          ],
+          status: over.isOver ? 'ended' : 'playing',
+          winner: over.winner || null,
+          winReason: over.reason,
+          lastMoveTimestamp: Date.now(),
+        };
+      });
+    }, 600);
+  };
+
   const handleCreateCustomGame = (vsBot: boolean) => {
-    sendWs('game:create_custom', { vsBot });
+    const player = currentUser || {
+      id: 'guest_' + Math.random().toString(36).substring(2, 9),
+      username: 'GuestPlayer',
+      avatarId: 'avatar-crown',
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      rating: 1200,
+      status: 'online',
+      createdAt: Date.now(),
+    };
+
+    if (!currentUser) {
+      setCurrentUser(player);
+    }
+
+    if (vsBot) {
+      const initialBoard = createInitialBoard();
+      const botRoom: GameRoom = {
+        id: `room_bot_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        name: `${player.username} vs Checkers Bot`,
+        status: 'playing',
+        redPlayer: {
+          id: player.id,
+          username: player.username,
+          avatarId: player.avatarId,
+          rating: player.rating || 1200,
+          color: 'red',
+        },
+        blackPlayer: {
+          id: 'bot_ai',
+          username: 'Checkers Bot (AI)',
+          avatarId: 'avatar-cyber',
+          rating: 1350,
+          color: 'black',
+          isBot: true,
+        },
+        currentTurn: 'red',
+        board: initialBoard,
+        history: [],
+        capturedRed: 0,
+        capturedBlack: 0,
+        winner: null,
+        createdAt: Date.now(),
+        lastMoveTimestamp: Date.now(),
+        turnTimeLimitSeconds: 45,
+        turnDeadline: Date.now() + 45000,
+        spectatorsCount: 0,
+      };
+
+      setActiveRoom(botRoom);
+      sounds.playMove();
+      showNotification('Practice vs Checkers AI Bot started!', 'info');
+
+      // Send to server if connected
+      sendWs('game:create_custom', { vsBot: true });
+    } else {
+      const initialBoard = createInitialBoard();
+      const customRoom: GameRoom = {
+        id: `room_table_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        name: `${player.username}'s Game Table`,
+        status: 'waiting',
+        redPlayer: {
+          id: player.id,
+          username: player.username,
+          avatarId: player.avatarId,
+          rating: player.rating || 1200,
+          color: 'red',
+        },
+        blackPlayer: null,
+        currentTurn: 'red',
+        board: initialBoard,
+        history: [],
+        capturedRed: 0,
+        capturedBlack: 0,
+        winner: null,
+        createdAt: Date.now(),
+        lastMoveTimestamp: Date.now(),
+        turnTimeLimitSeconds: 45,
+        turnDeadline: Date.now() + 45000,
+        spectatorsCount: 0,
+      };
+
+      setActiveRoom(customRoom);
+      showNotification('Game Table created! Waiting for a player to join...', 'info');
+
+      // Send to server if connected
+      sendWs('game:create_custom', { vsBot: false });
+    }
   };
 
   const handleJoinGameRoom = (roomId: string) => {
@@ -293,12 +447,74 @@ export default function App() {
 
   const handleSendMove = (move: MoveOption) => {
     if (!activeRoom) return;
+
+    // Send to WebSocket server if connected
     sendWs('game:move', { roomId: activeRoom.id, move });
+
+    const isBotGame = activeRoom.blackPlayer?.isBot || activeRoom.id.includes('bot');
+    const isLocalRoom = activeRoom.id.includes('table') || activeRoom.id.includes('room_');
+
+    if (isBotGame || isLocalRoom) {
+      const { newBoard, capturedPiece, becameKing } = executeMove(activeRoom.board, move);
+      let capRed = activeRoom.capturedRed;
+      let capBlack = activeRoom.capturedBlack;
+      if (capturedPiece) {
+        if (capturedPiece.color === 'red') capRed++;
+        if (capturedPiece.color === 'black') capBlack++;
+        sounds.playCapture();
+      } else {
+        sounds.playMove();
+      }
+
+      const nextTurn = activeRoom.currentTurn === 'red' ? 'black' : 'red';
+      const over = checkGameOver(newBoard, nextTurn);
+
+      const updatedRoom: GameRoom = {
+        ...activeRoom,
+        board: newBoard,
+        currentTurn: nextTurn,
+        capturedRed: capRed,
+        capturedBlack: capBlack,
+        history: [
+          ...activeRoom.history,
+          {
+            id: `m_${Date.now()}`,
+            playerColor: activeRoom.currentTurn,
+            from: move.from,
+            to: move.to,
+            capturedCount: move.captures.length,
+            becameKing,
+            timestamp: Date.now(),
+          },
+        ],
+        status: over.isOver ? 'ended' : 'playing',
+        winner: over.winner || null,
+        winReason: over.reason,
+        lastMoveTimestamp: Date.now(),
+      };
+
+      setActiveRoom(updatedRoom);
+
+      if (isBotGame && updatedRoom.status === 'playing' && nextTurn === 'black') {
+        triggerBotMove(updatedRoom);
+      }
+    }
   };
 
   const handleResign = () => {
     if (!activeRoom) return;
     sendWs('game:resign', { roomId: activeRoom.id });
+
+    setActiveRoom((prev) => {
+      if (!prev) return null;
+      const winner = prev.currentTurn === 'red' ? 'black' : 'red';
+      return {
+        ...prev,
+        status: 'ended',
+        winner,
+        winReason: 'Player resigned',
+      };
+    });
   };
 
   const handleLeaveRoom = () => {
