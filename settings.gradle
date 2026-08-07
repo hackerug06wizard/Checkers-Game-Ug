@@ -4,4 +4,9 @@ project(':app').projectDir = new File('./android/app')
 include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./android/capacitor-cordova-android-plugins')
 
-apply from: './android/capacitor.settings.gradle'
+include ':capacitor-android'
+def capDir = new File(rootDir, 'node_modules/@capacitor/android/capacitor')
+if (!capDir.exists()) {
+    capDir = new File(rootDir, 'android/../node_modules/@capacitor/android/capacitor')
+}
+project(':capacitor-android').projectDir = capDir
