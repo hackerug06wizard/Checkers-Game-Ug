@@ -188,6 +188,38 @@ export async function signInWithApple(rememberMe: boolean = true): Promise<UserP
   return existingProfile;
 }
 
+// Lookup or login by username or phone number directly in-app
+export async function loginWithUsernameOrPhone(identifier: string): Promise<UserProfile | null> {
+  try {
+    const clean = identifier.trim();
+    if (!clean) return null;
+
+    const lower = clean.toLowerCase();
+    const usersRef = collection(db, 'users');
+
+    // Query by username lowercase or phone number
+    const qUser = query(usersRef, where('usernameLowercase', '==', lower));
+    let snap = await getDocs(qUser);
+
+    if (snap.empty) {
+      const qPhone = query(usersRef, where('phoneNumber', '==', clean));
+      snap = await getDocs(qPhone);
+    }
+
+    if (!snap.empty) {
+      const userDoc = snap.docs[0];
+      const profile = userDoc.data() as UserProfile;
+      profile.isOnline = true;
+      profile.lastActiveTimestamp = Date.now();
+      await saveUserProfileToFirestore(profile);
+      return profile;
+    }
+  } catch (err) {
+    console.warn('In-app login lookup error:', err);
+  }
+  return null;
+}
+
 // Logout
 export async function logOutUser(): Promise<void> {
   if (auth.currentUser) {
