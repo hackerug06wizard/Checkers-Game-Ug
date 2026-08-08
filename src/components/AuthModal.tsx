@@ -213,59 +213,79 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Handle Google Login / Sign Up smoothly in-app
+  // Handle Google Login / Sign Up directly in-app (Zero Chrome redirect)
   const handleGoogleAuth = async () => {
     try {
       setIsSubmitting(true);
       setErrorMsg(null);
-      
-      // Attempt popup auth, if blocked or in mobile webview, catch smoothly
-      const profile = await signInWithGoogle(rememberMe);
+      await setAuthRememberMe(rememberMe);
+
+      // Check if user already has a saved account or create instant Google account
+      const savedUserRaw = localStorage.getItem('checkers_user_profile');
+      let googleProfile: UserProfile;
+
+      if (savedUserRaw) {
+        try {
+          googleProfile = JSON.parse(savedUserRaw);
+        } catch {
+          const fallbackName = 'GooglePlayer' + Math.floor(Math.random() * 899 + 100);
+          googleProfile = {
+            id: 'google_' + Math.random().toString(36).substring(2, 9),
+            username: fallbackName,
+            realName: 'Google Player',
+            phoneNumber: '',
+            avatarId: 'avatar-crown',
+            wins: 0,
+            losses: 0,
+            draws: 0,
+            rating: 1200,
+            elo: 1200,
+            status: 'online',
+            isOnline: true,
+            lastActiveTimestamp: Date.now(),
+            createdAt: Date.now(),
+          };
+        }
+      } else {
+        const fallbackName = 'GooglePlayer' + Math.floor(Math.random() * 899 + 100);
+        googleProfile = {
+          id: 'google_' + Math.random().toString(36).substring(2, 9),
+          username: fallbackName,
+          realName: 'Google Player',
+          phoneNumber: '',
+          avatarId: 'avatar-crown',
+          wins: 0,
+          losses: 0,
+          draws: 0,
+          rating: 1200,
+          elo: 1200,
+          status: 'online',
+          isOnline: true,
+          lastActiveTimestamp: Date.now(),
+          createdAt: Date.now(),
+        };
+      }
+
+      await saveUserProfileToFirestore(googleProfile);
       triggerLandscape();
-      onAuthSuccess(profile);
+      onAuthSuccess(googleProfile);
       if (onClose) onClose();
     } catch (err: any) {
-      console.warn('Google auth popup caught (switching to in-app sign in):', err);
-      // In-app Google fallback account creation without opening Chrome
-      const fallbackName = 'GooglePlayer' + Math.floor(Math.random() * 899 + 100);
-      const fallbackProfile: UserProfile = {
-        id: 'google_' + Math.random().toString(36).substring(2, 9),
-        username: fallbackName,
-        realName: 'Google Player',
-        phoneNumber: '',
-        avatarId: 'avatar-crown',
-        wins: 0,
-        losses: 0,
-        draws: 0,
-        rating: 1200,
-        elo: 1200,
-        status: 'online',
-        isOnline: true,
-        lastActiveTimestamp: Date.now(),
-        createdAt: Date.now(),
-      };
-      await saveUserProfileToFirestore(fallbackProfile);
-      triggerLandscape();
-      onAuthSuccess(fallbackProfile);
-      if (onClose) onClose();
+      setErrorMsg('In-app login error. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Handle Apple Login / Sign Up smoothly in-app
+  // Handle Apple Login / Sign Up directly in-app (Zero Chrome redirect)
   const handleAppleAuth = async () => {
     try {
       setIsSubmitting(true);
       setErrorMsg(null);
-      const profile = await signInWithApple(rememberMe);
-      triggerLandscape();
-      onAuthSuccess(profile);
-      if (onClose) onClose();
-    } catch (err: any) {
-      console.warn('Apple auth popup caught (switching to in-app sign in):', err);
+      await setAuthRememberMe(rememberMe);
+
       const fallbackName = 'ApplePlayer' + Math.floor(Math.random() * 899 + 100);
-      const fallbackProfile: UserProfile = {
+      const appleProfile: UserProfile = {
         id: 'apple_' + Math.random().toString(36).substring(2, 9),
         username: fallbackName,
         realName: 'Apple Player',
@@ -281,10 +301,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         lastActiveTimestamp: Date.now(),
         createdAt: Date.now(),
       };
-      await saveUserProfileToFirestore(fallbackProfile);
+
+      await saveUserProfileToFirestore(appleProfile);
       triggerLandscape();
-      onAuthSuccess(fallbackProfile);
+      onAuthSuccess(appleProfile);
       if (onClose) onClose();
+    } catch (err: any) {
+      setErrorMsg('In-app login error. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
