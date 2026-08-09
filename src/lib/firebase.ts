@@ -22,6 +22,9 @@ import {
   where,
   updateDoc,
   serverTimestamp,
+  onSnapshot,
+  limit,
+  orderBy,
 } from 'firebase/firestore';
 import { UserProfile } from '../types';
 
@@ -218,6 +221,47 @@ export async function loginWithUsernameOrPhone(identifier: string): Promise<User
     console.warn('In-app login lookup error:', err);
   }
   return null;
+}
+
+// Subscribe to Realtime Online Users in Firestore
+export function subscribeToOnlineUsers(callback: (users: UserProfile[]) => void) {
+  try {
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, limit(50));
+    return onSnapshot(q, (snapshot) => {
+      const active: UserProfile[] = [];
+      const now = Date.now();
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as UserProfile;
+        if (data && data.username) {
+          // Consider user online if active within last 4 minutes
+          const isRecentlyActive = !data.lastActiveTimestamp || (now - data.lastActiveTimestamp < 240000);
+          if (data.isOnline !== false && isRecentlyActive) {
+            active.push(data);
+          }
+        }
+      });
+      callback(active);
+    }, (err) => {
+      console.warn('Realtime online users listener fallback:', err);
+    });
+  } catch (err) {
+    console.warn('Realtime listener failed:', err);
+    return () => {};
+  }
+}
+
+// Update presence heartbeat in Firestore
+export async function updatePresenceHeartbeat(userId: string): Promise<void> {
+  try {
+    const userRef = doc(db, 'users', userId);
+    await updateDoc(userRef, {
+      isOnline: true,
+      lastActiveTimestamp: Date.now(),
+    });
+  } catch (e) {
+    // ignore
+  }
 }
 
 // Logout

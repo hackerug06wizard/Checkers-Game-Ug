@@ -189,7 +189,8 @@ export function getValidMovesForPiece(
 
 export function getValidMovesForPlayer(
   board: (CheckersPiece | null)[][],
-  color: PieceColor
+  color: PieceColor,
+  forcedJumps: boolean = true
 ): MoveOption[] {
   const movesPerPiece: MoveOption[] = [];
 
@@ -208,6 +209,12 @@ export function getValidMovesForPlayer(
   for (const piece of playerPieces) {
     const pieceMoves = getValidMovesForPiece(board, piece);
     movesPerPiece.push(...pieceMoves);
+  }
+
+  // Mandatory Jumps Rule: If capture moves exist, player MUST make a jump
+  const jumpMoves = movesPerPiece.filter((m) => m.captures && m.captures.length > 0);
+  if (forcedJumps && jumpMoves.length > 0) {
+    return jumpMoves;
   }
 
   return movesPerPiece;

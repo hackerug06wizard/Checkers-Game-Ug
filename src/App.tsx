@@ -16,7 +16,12 @@ import { ProfileModal } from './components/ProfileModal';
 import { AndroidInstallModal } from './components/AndroidInstallModal';
 import { AvatarBadge } from './components/AvatarBadge';
 import { sounds } from './lib/sound';
-import { saveUserProfileToFirestore, getLeaderboardFromFirestore } from './lib/firebase';
+import {
+  saveUserProfileToFirestore,
+  getLeaderboardFromFirestore,
+  subscribeToOnlineUsers,
+  updatePresenceHeartbeat,
+} from './lib/firebase';
 import {
   createInitialBoard,
   executeMove,
@@ -228,6 +233,32 @@ export default function App() {
       if (socket) socket.close();
     };
   }, []);
+
+  // Subscribe to real-time Firestore presence so lobby online players updates instantly
+  useEffect(() => {
+    const unsubscribe = subscribeToOnlineUsers((firestoreUsers) => {
+      setOnlineUsers((prev) => {
+        const map = new Map<string, UserProfile>();
+        firestoreUsers.forEach((u) => map.set(u.id, u));
+        prev.forEach((u) => {
+          if (!map.has(u.id)) map.set(u.id, u);
+        });
+        return Array.from(map.values());
+      });
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Update presence heartbeat in Firestore
+  useEffect(() => {
+    if (!currentUser) return;
+    updatePresenceHeartbeat(currentUser.id);
+    const interval = setInterval(() => {
+      updatePresenceHeartbeat(currentUser.id);
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [currentUser]);
 
   const sendWs = (type: string, payload: any) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
