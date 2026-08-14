@@ -30,7 +30,7 @@ import { UserProfile } from '../types';
 
 // Web App's Firebase Configuration (read from environment variables or fallback to defaults)
 export const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCEzDbBHKvmL0qg19CnvCCRZsYwx03NlTc",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBGLFB8enRtpk9LXDzxJQZtz9iM_L-LEkY",
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "checkers-game-ug.firebaseapp.com",
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "checkers-game-ug",
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "checkers-game-ug.firebasestorage.app",
