@@ -182,10 +182,10 @@ export const CheckersBoard: React.FC<CheckersBoardProps> = ({
         )}
       </div>
 
-      {/* Main Board Container - Increased Board Size */}
-      <div className={`w-[85vw] max-w-[82vh] h-[85vw] max-h-[82vh] aspect-square mx-auto p-2 sm:p-3 rounded-3xl border-4 shadow-2xl flex flex-col justify-between select-none transition-all duration-300 ${template.borderFrame}`}>
+      {/* Main Board Container - Screen-fitted Board Size */}
+      <div className={`w-[min(74vw,74vh)] h-[min(74vw,74vh)] aspect-square mx-auto p-1.5 sm:p-2.5 rounded-2xl sm:rounded-3xl border-2 sm:border-4 shadow-2xl flex flex-col justify-between select-none transition-all duration-300 ${template.borderFrame}`}>
         {/* 8x8 Grid Container */}
-        <div className="w-full h-full grid grid-cols-8 grid-rows-8 rounded-2xl overflow-hidden border-2 border-slate-800/60 relative shadow-inner">
+        <div className="w-full h-full grid grid-cols-8 grid-rows-8 rounded-xl sm:rounded-2xl overflow-hidden border border-slate-800/60 relative shadow-inner">
           {Array.from({ length: 8 }).map((_, displayR) => {
             const r = isFlipped ? 7 - displayR : displayR;
 

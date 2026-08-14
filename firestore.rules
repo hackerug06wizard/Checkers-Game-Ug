@@ -3,30 +3,41 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Users collection rules - allow reading and writing for all in-app user profiles
+    // Users collection rules - allow reading, writing, and deleting for all in-app user profiles
     match /users/{userId} {
-      allow read, write, create, update: if true;
+      allow read, write, create, update, delete: if true;
+    }
+
+    // Direct Challenge requests between players
+    match /challenges/{challengeId} {
+      allow read, write, create, update, delete: if true;
     }
 
     // Match Rooms collection rules for real-time multiplayer
     match /rooms/{roomId} {
       allow read, write, create, update, delete: if true;
+
+      // In-game chat subcollection
+      match /chat/{chatId} {
+        allow read, write, create, update, delete: if true;
+      }
     }
 
     // Global Chat messages
     match /chat/{messageId} {
-      allow read, write, create: if true;
+      allow read, write, create, update, delete: if true;
     }
 
     // Leaderboards collection
     match /leaderboard/{entry} {
-      allow read, write, create, update: if true;
+      allow read, write, create, update, delete: if true;
     }
 
-    // Global document access
+    // Fallback document access
     match /{document=**} {
       allow read, write: if true;
     }
   }
 }
+
 

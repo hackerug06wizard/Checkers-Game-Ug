@@ -1,6 +1,9 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
+  signInWithPopup,
+  GoogleAuthProvider,
+  OAuthProvider,
   signOut,
   setPersistence,
   browserLocalPersistence,
@@ -14,6 +17,7 @@ import {
   setDoc,
   getDoc,
   getDocs,
+  deleteDoc,
   collection,
   query,
   where,
@@ -22,7 +26,8 @@ import {
   onSnapshot,
   limit,
 } from 'firebase/firestore';
-import { UserProfile } from '../types';
+import { UserProfile, Challenge, GameRoom, ChatMessage, GamePlayer } from '../types';
+import { createInitialBoard } from './checkersEngine';
 
 // Web App's Firebase Configuration
 export const firebaseConfig = {
@@ -84,6 +89,74 @@ export async function saveUserProfileToFirestore(profile: UserProfile): Promise<
     console.error('Firestore saveUserProfileToFirestore error:', err);
     throw err;
   }
+}
+
+// Helper to construct profile object from Firebase User
+function createProfileFromFirebaseUser(user: any): UserProfile {
+  const baseName = (user.displayName || user.email?.split('@')[0] || 'Player')
+    .replace(/[^a-zA-Z]/g, '');
+  const cleanUsername = baseName || 'MasterPlayer';
+
+  return {
+    id: user.uid,
+    username: cleanUsername,
+    realName: user.displayName || cleanUsername,
+    phoneNumber: user.phoneNumber || '',
+    avatarId: 'avatar-crown',
+    termsAccepted: true,
+    elo: 1200,
+    rating: 1200,
+    status: 'online',
+    createdAt: Date.now(),
+    gamesPlayed: 0,
+    wins: 0,
+    losses: 0,
+    draws: 0,
+    isOnline: true,
+    lastActiveTimestamp: Date.now(),
+  };
+}
+
+// Google Sign In
+export async function signInWithGoogle(rememberMe: boolean = true): Promise<UserProfile> {
+  await setAuthRememberMe(rememberMe);
+  const provider = new GoogleAuthProvider();
+  const result = await signInWithPopup(auth, provider);
+  const user = result.user;
+
+  let existingProfile = await getUserProfileFromFirestore(user.uid);
+  if (!existingProfile) {
+    existingProfile = createProfileFromFirebaseUser(user);
+    await saveUserProfileToFirestore(existingProfile);
+  } else {
+    existingProfile.isOnline = true;
+    existingProfile.lastActiveTimestamp = Date.now();
+    await saveUserProfileToFirestore(existingProfile);
+  }
+
+  localStorage.setItem('checkers_user_profile', JSON.stringify(existingProfile));
+  return existingProfile;
+}
+
+// Apple Sign In
+export async function signInWithApple(rememberMe: boolean = true): Promise<UserProfile> {
+  await setAuthRememberMe(rememberMe);
+  const provider = new OAuthProvider('apple.com');
+  const result = await signInWithPopup(auth, provider);
+  const user = result.user;
+
+  let existingProfile = await getUserProfileFromFirestore(user.uid);
+  if (!existingProfile) {
+    existingProfile = createProfileFromFirebaseUser(user);
+    await saveUserProfileToFirestore(existingProfile);
+  } else {
+    existingProfile.isOnline = true;
+    existingProfile.lastActiveTimestamp = Date.now();
+    await saveUserProfileToFirestore(existingProfile);
+  }
+
+  localStorage.setItem('checkers_user_profile', JSON.stringify(existingProfile));
+  return existingProfile;
 }
 
 // Register a new user in-app directly into Firestore
@@ -242,7 +315,6 @@ export function subscribeToOnlineUsers(callback: (users: UserProfile[]) => void)
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as UserProfile;
         if (data && data.username) {
-          // Consider user online if active within last 5 minutes
           const isRecentlyActive = !data.lastActiveTimestamp || (now - data.lastActiveTimestamp < 300000);
           if (data.isOnline !== false && isRecentlyActive) {
             active.push(data);
@@ -272,6 +344,202 @@ export async function updatePresenceHeartbeat(userId: string): Promise<void> {
   }
 }
 
+// ==========================================
+// REAL-TIME FIRESTORE CHALLENGE SYSTEM
+// ==========================================
+
+export async function sendChallengeToFirestore(fromUser: UserProfile, toUser: UserProfile): Promise<string> {
+  const challengeId = `ch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const challengeDoc = doc(db, 'challenges', challengeId);
+  const challengeData = {
+    id: challengeId,
+    fromUser,
+    toUser,
+    targetUserId: toUser.id,
+    status: 'pending',
+    createdAt: Date.now(),
+  };
+  await setDoc(challengeDoc, challengeData);
+  console.log(`[Firestore] Challenge created ${challengeId} from ${fromUser.username} to ${toUser.username}`);
+  return challengeId;
+}
+
+export function subscribeToIncomingChallenges(userId: string, callback: (challenge: Challenge | null) => void) {
+  try {
+    const q = query(
+      collection(db, 'challenges'),
+      where('targetUserId', '==', userId),
+      where('status', '==', 'pending'),
+      limit(1)
+    );
+    return onSnapshot(q, (snapshot) => {
+      if (!snapshot.empty) {
+        const data = snapshot.docs[0].data() as Challenge;
+        // Ignore stale challenges older than 90 seconds
+        if (Date.now() - data.createdAt < 90000) {
+          callback(data);
+          return;
+        }
+      }
+      callback(null);
+    });
+  } catch (err) {
+    console.warn('subscribeToIncomingChallenges error:', err);
+    return () => {};
+  }
+}
+
+export function subscribeToChallengeDoc(challengeId: string, callback: (challenge: any) => void) {
+  try {
+    const challengeRef = doc(db, 'challenges', challengeId);
+    return onSnapshot(challengeRef, (snap) => {
+      if (snap.exists()) {
+        callback(snap.data());
+      }
+    });
+  } catch (err) {
+    console.warn('subscribeToChallengeDoc error:', err);
+    return () => {};
+  }
+}
+
+export async function respondToChallengeInFirestore(
+  challengeId: string,
+  accept: boolean,
+  fromUser: UserProfile,
+  toUser: UserProfile
+): Promise<string | null> {
+  try {
+    const challengeRef = doc(db, 'challenges', challengeId);
+    if (!accept) {
+      await updateDoc(challengeRef, { status: 'declined' });
+      return null;
+    }
+
+    const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const isFromRed = Math.random() < 0.5;
+
+    const redPlayer: GamePlayer = {
+      id: isFromRed ? fromUser.id : toUser.id,
+      username: isFromRed ? fromUser.username : toUser.username,
+      avatarId: isFromRed ? fromUser.avatarId : toUser.avatarId,
+      rating: isFromRed ? fromUser.rating || 1200 : toUser.rating || 1200,
+      color: 'red',
+    };
+
+    const blackPlayer: GamePlayer = {
+      id: isFromRed ? toUser.id : fromUser.id,
+      username: isFromRed ? toUser.username : fromUser.username,
+      avatarId: isFromRed ? toUser.avatarId : fromUser.avatarId,
+      rating: isFromRed ? toUser.rating || 1200 : fromUser.rating || 1200,
+      color: 'black',
+    };
+
+    const newRoom: GameRoom = {
+      id: roomId,
+      name: `${redPlayer.username} vs ${blackPlayer.username}`,
+      status: 'playing',
+      redPlayer,
+      blackPlayer,
+      currentTurn: 'red',
+      board: createInitialBoard(),
+      history: [],
+      capturedRed: 0,
+      capturedBlack: 0,
+      winner: null,
+      createdAt: Date.now(),
+      lastMoveTimestamp: Date.now(),
+      turnTimeLimitSeconds: 45,
+      turnDeadline: Date.now() + 45000,
+      spectatorsCount: 0,
+    };
+
+    await saveGameRoomToFirestore(newRoom);
+    await updateDoc(challengeRef, { status: 'accepted', roomId });
+    return roomId;
+  } catch (e) {
+    console.error('respondToChallengeInFirestore error:', e);
+    return null;
+  }
+}
+
+// ==========================================
+// REAL-TIME FIRESTORE GAME ROOM & CHAT
+// ==========================================
+
+export async function saveGameRoomToFirestore(room: GameRoom): Promise<void> {
+  try {
+    const roomRef = doc(db, 'rooms', room.id);
+    await setDoc(roomRef, room, { merge: true });
+  } catch (e) {
+    console.warn('saveGameRoomToFirestore error:', e);
+  }
+}
+
+export function subscribeToGameRoom(roomId: string, callback: (room: GameRoom | null) => void) {
+  try {
+    const roomRef = doc(db, 'rooms', roomId);
+    return onSnapshot(roomRef, (snap) => {
+      if (snap.exists()) {
+        callback(snap.data() as GameRoom);
+      }
+    });
+  } catch (e) {
+    console.warn('subscribeToGameRoom error:', e);
+    return () => {};
+  }
+}
+
+export async function sendGameChatToFirestore(roomId: string, message: ChatMessage): Promise<void> {
+  try {
+    const msgRef = doc(db, 'rooms', roomId, 'messages', message.id);
+    await setDoc(msgRef, message);
+  } catch (e) {
+    console.warn('sendGameChatToFirestore error:', e);
+  }
+}
+
+export function subscribeToGameChat(roomId: string, callback: (messages: ChatMessage[]) => void) {
+  try {
+    const q = query(collection(db, 'rooms', roomId, 'messages'), limit(50));
+    return onSnapshot(q, (snapshot) => {
+      const msgs: ChatMessage[] = [];
+      snapshot.forEach((docSnap) => {
+        msgs.push(docSnap.data() as ChatMessage);
+      });
+      msgs.sort((a, b) => a.timestamp - b.timestamp);
+      callback(msgs);
+    });
+  } catch (e) {
+    console.warn('subscribeToGameChat error:', e);
+    return () => {};
+  }
+}
+
+// ==========================================
+// DELETE ACCOUNT
+// ==========================================
+
+export async function deleteUserAccount(userId: string): Promise<void> {
+  try {
+    const userRef = doc(db, 'users', userId);
+    await deleteDoc(userRef);
+  } catch (e) {
+    console.warn('deleteDoc user error:', e);
+  }
+
+  if (auth.currentUser) {
+    try {
+      await auth.currentUser.delete();
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  localStorage.removeItem('checkers_user_profile');
+  await signOut(auth);
+}
+
 // Logout
 export async function logOutUser(): Promise<void> {
   if (auth.currentUser) {
@@ -297,4 +565,5 @@ export async function logOutUser(): Promise<void> {
   localStorage.removeItem('checkers_user_profile');
   await signOut(auth);
 }
+
 
