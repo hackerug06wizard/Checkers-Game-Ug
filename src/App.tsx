@@ -19,8 +19,10 @@ import { sounds } from './lib/sound';
 import {
   saveUserProfileToFirestore,
   getLeaderboardFromFirestore,
+  subscribeToLeaderboard,
   subscribeToOnlineUsers,
   updatePresenceHeartbeat,
+  getUserProfileFromFirestore,
 } from './lib/firebase';
 import {
   createInitialBoard,
@@ -236,7 +238,7 @@ export default function App() {
 
   // Subscribe to real-time Firestore presence so lobby online players updates instantly
   useEffect(() => {
-    const unsubscribe = subscribeToOnlineUsers((firestoreUsers) => {
+    const unsubscribePresence = subscribeToOnlineUsers((firestoreUsers) => {
       setOnlineUsers((prev) => {
         const map = new Map<string, UserProfile>();
         firestoreUsers.forEach((u) => map.set(u.id, u));
@@ -247,7 +249,32 @@ export default function App() {
       });
     });
 
-    return () => unsubscribe();
+    const unsubscribeLeaderboard = subscribeToLeaderboard((boardUsers) => {
+      setLeaderboardEntries(boardUsers);
+    });
+
+    // Refresh saved user profile from Firestore if available
+    try {
+      const savedUserRaw = localStorage.getItem('checkers_user_profile');
+      if (savedUserRaw) {
+        const localUser = JSON.parse(savedUserRaw);
+        if (localUser?.id) {
+          getUserProfileFromFirestore(localUser.id).then((cloudProfile) => {
+            if (cloudProfile) {
+              setCurrentUser(cloudProfile);
+              localStorage.setItem('checkers_user_profile', JSON.stringify(cloudProfile));
+            }
+          }).catch(() => {});
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    return () => {
+      unsubscribePresence();
+      unsubscribeLeaderboard();
+    };
   }, []);
 
   // Update presence heartbeat in Firestore

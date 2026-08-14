@@ -3,40 +3,30 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper functions
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-
-    // Users collection rules
+    // Users collection rules - allow reading and writing for all in-app user profiles
     match /users/{userId} {
-      // Anyone can read user profiles for leaderboards and multiplayer matching
-      allow read: if true;
-      
-      // Users can create/update their own profile
-      allow create, update: if isAuthenticated() && request.auth.uid == userId;
-      
-      // Allow profile creation during Google/Apple sign-up
-      allow write: if isAuthenticated();
+      allow read, write, create, update: if true;
     }
 
-    // Match Rooms collection rules
+    // Match Rooms collection rules for real-time multiplayer
     match /rooms/{roomId} {
-      allow read, write: if isAuthenticated() || true;
+      allow read, write, create, update, delete: if true;
     }
 
-    // Global Chat & Leaderboard rules
+    // Global Chat messages
     match /chat/{messageId} {
-      allow read, create: if true;
+      allow read, write, create: if true;
     }
 
+    // Leaderboards collection
     match /leaderboard/{entry} {
-      allow read: if true;
-      allow write: if isAuthenticated();
+      allow read, write, create, update: if true;
+    }
+
+    // Global document access
+    match /{document=**} {
+      allow read, write: if true;
     }
   }
 }
+

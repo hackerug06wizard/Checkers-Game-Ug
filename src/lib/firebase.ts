@@ -1,9 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
-  signInWithPopup,
-  GoogleAuthProvider,
-  OAuthProvider,
   signOut,
   setPersistence,
   browserLocalPersistence,
@@ -24,11 +21,10 @@ import {
   serverTimestamp,
   onSnapshot,
   limit,
-  orderBy,
 } from 'firebase/firestore';
 import { UserProfile } from '../types';
 
-// Web App's Firebase Configuration (read from environment variables or fallback to defaults)
+// Web App's Firebase Configuration
 export const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBGLFB8enRtpk9LXDzxJQZtz9iM_L-LEkY",
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "checkers-game-ug.firebaseapp.com",
@@ -52,10 +48,11 @@ try {
 }
 export const db = firestoreDb;
 
-// Check if username is already taken by another user
+// Check if username is already taken by another user in Firestore
 export async function isUsernameTaken(username: string, excludeUid?: string): Promise<boolean> {
   try {
     const normalized = username.trim().toLowerCase();
+    if (!normalized) return false;
     const q = query(collection(db, 'users'), where('usernameLowercase', '==', normalized));
     const querySnap = await getDocs(q);
     
@@ -65,7 +62,7 @@ export async function isUsernameTaken(username: string, excludeUid?: string): Pr
     }
     return true;
   } catch (err) {
-    console.warn('Firestore isUsernameTaken query skipped due to rules/network:', err);
+    console.warn('Firestore isUsernameTaken query fallback:', err);
     return false;
   }
 }
@@ -76,13 +73,94 @@ export async function saveUserProfileToFirestore(profile: UserProfile): Promise<
     const userRef = doc(db, 'users', profile.id);
     const dataToSave = {
       ...profile,
-      usernameLowercase: profile.username.toLowerCase(),
+      usernameLowercase: (profile.username || '').toLowerCase(),
+      isOnline: profile.isOnline ?? true,
+      lastActiveTimestamp: Date.now(),
       updatedAt: serverTimestamp(),
     };
     await setDoc(userRef, dataToSave, { merge: true });
+    console.log(`[Firestore] Profile saved successfully for ${profile.username} (${profile.id})`);
   } catch (err) {
-    console.warn('Firestore setDoc warning (saving profile locally):', err);
+    console.error('Firestore saveUserProfileToFirestore error:', err);
+    throw err;
   }
+}
+
+// Register a new user in-app directly into Firestore
+export async function registerInAppUser(params: {
+  username: string;
+  realName: string;
+  phoneNumber: string;
+  avatarId: string;
+}): Promise<UserProfile> {
+  const cleanUsername = params.username.trim();
+  const taken = await isUsernameTaken(cleanUsername);
+  if (taken) {
+    throw new Error('This username is already taken. Please choose another username.');
+  }
+
+  const userId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const newProfile: UserProfile = {
+    id: userId,
+    username: cleanUsername,
+    realName: params.realName.trim(),
+    phoneNumber: params.phoneNumber.trim(),
+    avatarId: params.avatarId || 'avatar-crown',
+    termsAccepted: true,
+    wins: 0,
+    losses: 0,
+    draws: 0,
+    gamesPlayed: 0,
+    rating: 1200,
+    elo: 1200,
+    status: 'online',
+    isOnline: true,
+    lastActiveTimestamp: Date.now(),
+    createdAt: Date.now(),
+  };
+
+  await saveUserProfileToFirestore(newProfile);
+  localStorage.setItem('checkers_user_profile', JSON.stringify(newProfile));
+  return newProfile;
+}
+
+// Direct In-App User Login by Username or Phone Number from Firestore
+export async function loginWithUsernameOrPhone(identifier: string): Promise<UserProfile | null> {
+  try {
+    const clean = identifier.trim();
+    if (!clean) return null;
+
+    const lower = clean.toLowerCase();
+    const usersRef = collection(db, 'users');
+
+    // 1. Query by lowercase username
+    const qUser = query(usersRef, where('usernameLowercase', '==', lower));
+    let snap = await getDocs(qUser);
+
+    // 2. Query by phone number if not found
+    if (snap.empty) {
+      const qPhone = query(usersRef, where('phoneNumber', '==', clean));
+      snap = await getDocs(qPhone);
+    }
+
+    if (!snap.empty) {
+      const userDoc = snap.docs[0];
+      const profile = userDoc.data() as UserProfile;
+      const updatedProfile: UserProfile = {
+        ...profile,
+        status: 'online',
+        isOnline: true,
+        lastActiveTimestamp: Date.now(),
+      };
+      await saveUserProfileToFirestore(updatedProfile);
+      localStorage.setItem('checkers_user_profile', JSON.stringify(updatedProfile));
+      return updatedProfile;
+    }
+  } catch (err) {
+    console.error('In-app login lookup error:', err);
+    throw err;
+  }
+  return null;
 }
 
 // Fetch Top Leaderboard Entries from Firestore
@@ -92,7 +170,10 @@ export async function getLeaderboardFromFirestore(): Promise<UserProfile[]> {
     const snap = await getDocs(usersRef);
     const list: UserProfile[] = [];
     snap.forEach((docSnap) => {
-      list.push(docSnap.data() as UserProfile);
+      const u = docSnap.data() as UserProfile;
+      if (u && u.username) {
+        list.push(u);
+      }
     });
     // Sort by rating descending
     list.sort((a, b) => (b.rating || b.elo || 1200) - (a.rating || a.elo || 1200));
@@ -100,6 +181,30 @@ export async function getLeaderboardFromFirestore(): Promise<UserProfile[]> {
   } catch (err) {
     console.warn('Firestore leaderboard fetch warning:', err);
     return [];
+  }
+}
+
+// Subscribe to Realtime Leaderboard from Firestore
+export function subscribeToLeaderboard(callback: (leaderboard: UserProfile[]) => void) {
+  try {
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, limit(100));
+    return onSnapshot(q, (snapshot) => {
+      const list: UserProfile[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as UserProfile;
+        if (data && data.username) {
+          list.push(data);
+        }
+      });
+      list.sort((a, b) => (b.rating || b.elo || 1200) - (a.rating || a.elo || 1200));
+      callback(list);
+    }, (err) => {
+      console.warn('Realtime leaderboard listener warning:', err);
+    });
+  } catch (err) {
+    console.warn('Realtime leaderboard listener failed:', err);
+    return () => {};
   }
 }
 
@@ -126,116 +231,19 @@ export async function setAuthRememberMe(remember: boolean): Promise<void> {
   }
 }
 
-// Helper to construct profile object from Firebase User
-function createProfileFromFirebaseUser(user: any): UserProfile {
-  const baseName = (user.displayName || user.email?.split('@')[0] || 'Player')
-    .replace(/[^a-zA-Z]/g, '');
-  const cleanUsername = baseName || 'MasterPlayer';
-
-  return {
-    id: user.uid,
-    username: cleanUsername,
-    realName: user.displayName || cleanUsername,
-    phoneNumber: user.phoneNumber || '',
-    avatarId: 'avatar-crown',
-    elo: 1200,
-    rating: 1200,
-    status: 'online',
-    createdAt: Date.now(),
-    gamesPlayed: 0,
-    wins: 0,
-    losses: 0,
-    draws: 0,
-    isOnline: true,
-    lastActiveTimestamp: Date.now(),
-  };
-}
-
-// Google Sign In
-export async function signInWithGoogle(rememberMe: boolean = true): Promise<UserProfile> {
-  await setAuthRememberMe(rememberMe);
-  const provider = new GoogleAuthProvider();
-  const result = await signInWithPopup(auth, provider);
-  const user = result.user;
-
-  let existingProfile = await getUserProfileFromFirestore(user.uid);
-  if (!existingProfile) {
-    existingProfile = createProfileFromFirebaseUser(user);
-    await saveUserProfileToFirestore(existingProfile);
-  } else {
-    existingProfile.isOnline = true;
-    existingProfile.lastActiveTimestamp = Date.now();
-    await saveUserProfileToFirestore(existingProfile);
-  }
-
-  return existingProfile;
-}
-
-// Apple Sign In
-export async function signInWithApple(rememberMe: boolean = true): Promise<UserProfile> {
-  await setAuthRememberMe(rememberMe);
-  const provider = new OAuthProvider('apple.com');
-  const result = await signInWithPopup(auth, provider);
-  const user = result.user;
-
-  let existingProfile = await getUserProfileFromFirestore(user.uid);
-  if (!existingProfile) {
-    existingProfile = createProfileFromFirebaseUser(user);
-    await saveUserProfileToFirestore(existingProfile);
-  } else {
-    existingProfile.isOnline = true;
-    existingProfile.lastActiveTimestamp = Date.now();
-    await saveUserProfileToFirestore(existingProfile);
-  }
-
-  return existingProfile;
-}
-
-// Lookup or login by username or phone number directly in-app
-export async function loginWithUsernameOrPhone(identifier: string): Promise<UserProfile | null> {
-  try {
-    const clean = identifier.trim();
-    if (!clean) return null;
-
-    const lower = clean.toLowerCase();
-    const usersRef = collection(db, 'users');
-
-    // Query by username lowercase or phone number
-    const qUser = query(usersRef, where('usernameLowercase', '==', lower));
-    let snap = await getDocs(qUser);
-
-    if (snap.empty) {
-      const qPhone = query(usersRef, where('phoneNumber', '==', clean));
-      snap = await getDocs(qPhone);
-    }
-
-    if (!snap.empty) {
-      const userDoc = snap.docs[0];
-      const profile = userDoc.data() as UserProfile;
-      profile.isOnline = true;
-      profile.lastActiveTimestamp = Date.now();
-      await saveUserProfileToFirestore(profile);
-      return profile;
-    }
-  } catch (err) {
-    console.warn('In-app login lookup error:', err);
-  }
-  return null;
-}
-
 // Subscribe to Realtime Online Users in Firestore
 export function subscribeToOnlineUsers(callback: (users: UserProfile[]) => void) {
   try {
     const usersRef = collection(db, 'users');
-    const q = query(usersRef, limit(50));
+    const q = query(usersRef, limit(100));
     return onSnapshot(q, (snapshot) => {
       const active: UserProfile[] = [];
       const now = Date.now();
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as UserProfile;
         if (data && data.username) {
-          // Consider user online if active within last 4 minutes
-          const isRecentlyActive = !data.lastActiveTimestamp || (now - data.lastActiveTimestamp < 240000);
+          // Consider user online if active within last 5 minutes
+          const isRecentlyActive = !data.lastActiveTimestamp || (now - data.lastActiveTimestamp < 300000);
           if (data.isOnline !== false && isRecentlyActive) {
             active.push(data);
           }
@@ -243,7 +251,7 @@ export function subscribeToOnlineUsers(callback: (users: UserProfile[]) => void)
       });
       callback(active);
     }, (err) => {
-      console.warn('Realtime online users listener fallback:', err);
+      console.warn('Realtime online users listener warning:', err);
     });
   } catch (err) {
     console.warn('Realtime listener failed:', err);
@@ -260,7 +268,7 @@ export async function updatePresenceHeartbeat(userId: string): Promise<void> {
       lastActiveTimestamp: Date.now(),
     });
   } catch (e) {
-    // ignore
+    // If document doesn't exist or offline, ignore heartbeat error
   }
 }
 
@@ -274,5 +282,19 @@ export async function logOutUser(): Promise<void> {
       // ignore
     }
   }
+  try {
+    const raw = localStorage.getItem('checkers_user_profile');
+    if (raw) {
+      const user = JSON.parse(raw);
+      if (user?.id) {
+        const userRef = doc(db, 'users', user.id);
+        await updateDoc(userRef, { isOnline: false, lastActiveTimestamp: Date.now() });
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+  localStorage.removeItem('checkers_user_profile');
   await signOut(auth);
 }
+

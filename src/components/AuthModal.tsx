@@ -10,16 +10,15 @@ import {
   UserPlus,
   LogIn,
   Loader2,
-  Lock,
-  Search,
+  Sparkles,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   isUsernameTaken,
-  saveUserProfileToFirestore,
-  signInWithGoogle,
-  signInWithApple,
-  setAuthRememberMe,
+  registerInAppUser,
   loginWithUsernameOrPhone,
+  saveUserProfileToFirestore,
+  setAuthRememberMe,
 } from '../lib/firebase';
 import { UserProfile } from '../types';
 
@@ -37,32 +36,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   initialMode = 'signup',
 }) => {
   const [mode, setMode] = useState<'signin' | 'signup'>(initialMode);
-  
+
   // Sign Up Fields
   const [realName, setRealName] = useState('');
   const [username, setUsername] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(true);
   const [rememberMe, setRememberMe] = useState(true);
   const [selectedAvatarId, setSelectedAvatarId] = useState('avatar-crown');
 
-  // Sign In / Log In Field (Direct In-App Login)
+  // Sign In Field
   const [loginIdentifier, setLoginIdentifier] = useState('');
 
-  // Local saved profile detection
+  // Local saved profile detection for 1-Tap Fast Login
   const [savedUser, setSavedUser] = useState<UserProfile | null>(null);
 
   // Username validation state
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'invalid'>('idle');
   const [usernameError, setUsernameError] = useState<string | null>(null);
 
-  // General status
+  // General state
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     setMode(initialMode);
     setErrorMsg(null);
+    setSuccessMsg(null);
     try {
       const raw = localStorage.getItem('checkers_user_profile');
       if (raw) {
@@ -73,7 +74,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   }, [isOpen, initialMode]);
 
-  // Username Availability Check Debounce
+  // Real-time Username Availability Check
   useEffect(() => {
     if (mode !== 'signup') return;
     const clean = username.trim();
@@ -90,9 +91,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       return;
     }
 
-    if (clean.length < 3 || clean.length > 20) {
+    if (clean.length < 2 || clean.length > 20) {
       setUsernameStatus('invalid');
-      setUsernameError('Username must be 3-20 characters long.');
+      setUsernameError('Username must be 2 to 20 characters long.');
       return;
     }
 
@@ -110,16 +111,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           setUsernameError(null);
         }
       } catch (err) {
-        setUsernameStatus('idle');
+        setUsernameStatus('available');
       }
-    }, 450);
+    }, 400);
 
     return () => clearTimeout(timer);
   }, [username, mode]);
 
   if (!isOpen) return null;
 
-  // Lock orientation to landscape on login/signup success
+  // Lock orientation to landscape on mobile
   const triggerLandscape = () => {
     if (typeof window !== 'undefined' && window.screen && (window.screen as any).orientation?.lock) {
       try {
@@ -130,10 +131,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Handle In-App Direct Login (No Chrome redirect needed)
+  // Direct In-App Login Handler
   const handleInAppLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+    setSuccessMsg(null);
 
     const identifier = loginIdentifier.trim();
     if (!identifier) {
@@ -145,64 +147,56 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setIsSubmitting(true);
       await setAuthRememberMe(rememberMe);
 
-      // 1. Try finding in Firestore by username or phone
+      // 1. Look up user directly in Firestore
       const profile = await loginWithUsernameOrPhone(identifier);
       if (profile) {
+        setSuccessMsg(`Welcome back, ${profile.username}! Logging in...`);
         triggerLandscape();
-        onAuthSuccess(profile);
-        if (onClose) onClose();
+        setTimeout(() => {
+          onAuthSuccess(profile);
+          if (onClose) onClose();
+        }, 500);
         return;
       }
 
-      // 2. Check local saved user profile
-      if (savedUser && (
-        savedUser.username.toLowerCase() === identifier.toLowerCase() ||
-        savedUser.phoneNumber === identifier
-      )) {
+      // 2. Check local saved profile match
+      if (
+        savedUser &&
+        (savedUser.username.toLowerCase() === identifier.toLowerCase() ||
+          savedUser.phoneNumber === identifier)
+      ) {
+        const updated = { ...savedUser, isOnline: true, lastActiveTimestamp: Date.now() };
+        await saveUserProfileToFirestore(updated);
+        setSuccessMsg(`Welcome back, ${updated.username}!`);
         triggerLandscape();
-        onAuthSuccess(savedUser);
-        if (onClose) onClose();
+        setTimeout(() => {
+          onAuthSuccess(updated);
+          if (onClose) onClose();
+        }, 500);
         return;
       }
 
-      // 3. Fallback: Log in as player directly in-app
-      const cleanUsername = identifier.replace(/[^a-zA-Z]/g, '') || 'Player' + Math.floor(Math.random() * 900 + 100);
-      const instantProfile: UserProfile = {
-        id: 'usr_' + Math.random().toString(36).substring(2, 9),
-        username: cleanUsername,
-        realName: identifier,
-        phoneNumber: identifier.includes('+') || /\d/.test(identifier) ? identifier : '',
-        avatarId: 'avatar-crown',
-        wins: 0,
-        losses: 0,
-        draws: 0,
-        rating: 1200,
-        elo: 1200,
-        status: 'online',
-        isOnline: true,
-        lastActiveTimestamp: Date.now(),
-        createdAt: Date.now(),
-      };
-
-      await saveUserProfileToFirestore(instantProfile);
-      triggerLandscape();
-      onAuthSuccess(instantProfile);
-      if (onClose) onClose();
+      // 3. User not found in Firestore
+      setErrorMsg(
+        `No account found with username/phone "${identifier}". Please check for typos or sign up with a new profile!`
+      );
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Login failed. Please verify your details.');
+      setErrorMsg(err?.message || 'Login failed. Please verify your connection.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Handle Quick In-App Restore
+  // Quick 1-Tap Login
   const handleQuickRestore = async () => {
     if (!savedUser) return;
     try {
       setIsSubmitting(true);
-      await saveUserProfileToFirestore(savedUser);
+      setErrorMsg(null);
+      const updated = { ...savedUser, isOnline: true, lastActiveTimestamp: Date.now() };
+      await saveUserProfileToFirestore(updated);
       triggerLandscape();
-      onAuthSuccess(savedUser);
+      onAuthSuccess(updated);
       if (onClose) onClose();
     } catch (e) {
       triggerLandscape();
@@ -213,122 +207,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Handle Google Login / Sign Up directly in-app (Zero Chrome redirect)
-  const handleGoogleAuth = async () => {
-    try {
-      setIsSubmitting(true);
-      setErrorMsg(null);
-      await setAuthRememberMe(rememberMe);
-
-      // Check if user already has a saved account or create instant Google account
-      const savedUserRaw = localStorage.getItem('checkers_user_profile');
-      let googleProfile: UserProfile;
-
-      if (savedUserRaw) {
-        try {
-          googleProfile = JSON.parse(savedUserRaw);
-        } catch {
-          const fallbackName = 'GooglePlayer' + Math.floor(Math.random() * 899 + 100);
-          googleProfile = {
-            id: 'google_' + Math.random().toString(36).substring(2, 9),
-            username: fallbackName,
-            realName: 'Google Player',
-            phoneNumber: '',
-            avatarId: 'avatar-crown',
-            wins: 0,
-            losses: 0,
-            draws: 0,
-            rating: 1200,
-            elo: 1200,
-            status: 'online',
-            isOnline: true,
-            lastActiveTimestamp: Date.now(),
-            createdAt: Date.now(),
-          };
-        }
-      } else {
-        const fallbackName = 'GooglePlayer' + Math.floor(Math.random() * 899 + 100);
-        googleProfile = {
-          id: 'google_' + Math.random().toString(36).substring(2, 9),
-          username: fallbackName,
-          realName: 'Google Player',
-          phoneNumber: '',
-          avatarId: 'avatar-crown',
-          wins: 0,
-          losses: 0,
-          draws: 0,
-          rating: 1200,
-          elo: 1200,
-          status: 'online',
-          isOnline: true,
-          lastActiveTimestamp: Date.now(),
-          createdAt: Date.now(),
-        };
-      }
-
-      await saveUserProfileToFirestore(googleProfile);
-      triggerLandscape();
-      onAuthSuccess(googleProfile);
-      if (onClose) onClose();
-    } catch (err: any) {
-      setErrorMsg('In-app login error. Please try again.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Handle Apple Login / Sign Up directly in-app (Zero Chrome redirect)
-  const handleAppleAuth = async () => {
-    try {
-      setIsSubmitting(true);
-      setErrorMsg(null);
-      await setAuthRememberMe(rememberMe);
-
-      const fallbackName = 'ApplePlayer' + Math.floor(Math.random() * 899 + 100);
-      const appleProfile: UserProfile = {
-        id: 'apple_' + Math.random().toString(36).substring(2, 9),
-        username: fallbackName,
-        realName: 'Apple Player',
-        phoneNumber: '',
-        avatarId: 'avatar-crown',
-        wins: 0,
-        losses: 0,
-        draws: 0,
-        rating: 1200,
-        elo: 1200,
-        status: 'online',
-        isOnline: true,
-        lastActiveTimestamp: Date.now(),
-        createdAt: Date.now(),
-      };
-
-      await saveUserProfileToFirestore(appleProfile);
-      triggerLandscape();
-      onAuthSuccess(appleProfile);
-      if (onClose) onClose();
-    } catch (err: any) {
-      setErrorMsg('In-app login error. Please try again.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Handle Form Sign Up
+  // Direct In-App Account Creation Handler
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+    setSuccessMsg(null);
 
-    if (!realName.trim()) {
-      setErrorMsg('Please enter your real name.');
+    const cleanRealName = realName.trim();
+    const cleanUsername = username.trim();
+    const cleanPhone = phoneNumber.trim();
+
+    if (!cleanRealName) {
+      setErrorMsg('Please enter your full name.');
       return;
     }
 
-    if (usernameStatus === 'taken' || usernameStatus === 'invalid' || !username.trim()) {
-      setErrorMsg(usernameError || 'Please provide a valid unique username.');
+    if (usernameStatus === 'taken' || usernameStatus === 'invalid' || !cleanUsername) {
+      setErrorMsg(usernameError || 'Please choose a valid unique username.');
       return;
     }
 
-    if (!phoneNumber.trim()) {
+    if (!cleanPhone) {
       setErrorMsg('Please enter your phone number.');
       return;
     }
@@ -341,32 +240,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     try {
       setIsSubmitting(true);
       await setAuthRememberMe(rememberMe);
-      
-      const userId = 'usr_' + Math.random().toString(36).substring(2, 10);
-      const newProfile: UserProfile = {
-        id: userId,
-        username: username.trim(),
-        realName: realName.trim(),
-        phoneNumber: phoneNumber.trim(),
-        termsAccepted: true,
-        avatarId: selectedAvatarId,
-        wins: 0,
-        losses: 0,
-        draws: 0,
-        rating: 1200,
-        elo: 1200,
-        status: 'online',
-        isOnline: true,
-        lastActiveTimestamp: Date.now(),
-        createdAt: Date.now(),
-      };
 
-      await saveUserProfileToFirestore(newProfile);
+      // Register directly in Firestore
+      const newProfile = await registerInAppUser({
+        username: cleanUsername,
+        realName: cleanRealName,
+        phoneNumber: cleanPhone,
+        avatarId: selectedAvatarId,
+      });
+
+      setSuccessMsg(`Account created for ${newProfile.username}! Starting arena...`);
       triggerLandscape();
-      onAuthSuccess(newProfile);
-      if (onClose) onClose();
+
+      setTimeout(() => {
+        onAuthSuccess(newProfile);
+        if (onClose) onClose();
+      }, 500);
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Sign up failed. Please check details.');
+      setErrorMsg(err?.message || 'Account creation failed. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -375,19 +266,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/90 backdrop-blur-md animate-fade-in overflow-y-auto">
       <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl my-auto overflow-hidden p-5 sm:p-7 space-y-5">
-        
         {/* Header Title */}
         <div className="text-center space-y-1.5">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-500 to-red-600 shadow-lg shadow-amber-900/30">
             <Crown className="w-6 h-6 text-slate-950" />
           </div>
           <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white">
-            {mode === 'signup' ? 'Create Checkers Account' : 'In-App Player Login'}
+            {mode === 'signup' ? 'Create Arena Profile' : 'Player In-App Login'}
           </h2>
           <p className="text-xs text-slate-400">
             {mode === 'signup'
-              ? 'Sign up directly in the app, choose your username & play online!'
-              : 'Enter your username or phone number to log in right inside the app.'}
+              ? 'Sign up directly within the app, pick your avatar & climb real-time leaderboards!'
+              : 'Enter your username or phone number to sign in seamlessly.'}
           </p>
         </div>
 
@@ -395,7 +285,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         <div className="flex rounded-2xl bg-slate-950 p-1 border border-slate-800">
           <button
             type="button"
-            onClick={() => setMode('signup')}
+            onClick={() => {
+              setMode('signup');
+              setErrorMsg(null);
+            }}
             className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 ${
               mode === 'signup'
                 ? 'bg-amber-500 text-slate-950 shadow-md'
@@ -403,12 +296,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             }`}
           >
             <UserPlus className="w-4 h-4" />
-            <span>Sign Up</span>
+            <span>Create Account</span>
           </button>
 
           <button
             type="button"
-            onClick={() => setMode('signin')}
+            onClick={() => {
+              setMode('signin');
+              setErrorMsg(null);
+            }}
             className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 ${
               mode === 'signin'
                 ? 'bg-amber-500 text-slate-950 shadow-md'
@@ -420,9 +316,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </button>
         </div>
 
-        {/* Global Error Banner */}
+        {/* Success Banner */}
+        {successMsg && (
+          <div className="p-3 bg-emerald-950/80 border border-emerald-800 rounded-2xl text-emerald-300 text-xs font-semibold flex items-center gap-2 animate-fade-in">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{successMsg}</span>
+          </div>
+        )}
+
+        {/* Error Banner */}
         {errorMsg && (
-          <div className="p-3 bg-rose-950/80 border border-rose-800 rounded-2xl text-rose-300 text-xs font-semibold flex items-start gap-2">
+          <div className="p-3 bg-rose-950/80 border border-rose-800 rounded-2xl text-rose-300 text-xs font-semibold flex items-start gap-2 animate-fade-in">
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
             <span>{errorMsg}</span>
           </div>
@@ -430,21 +334,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {/* Quick In-App Restore Banner if Local User Exists */}
         {savedUser && (
-          <div className="p-3 bg-slate-950 border border-amber-500/30 rounded-2xl flex items-center justify-between gap-3">
+          <div className="p-3 bg-slate-950 border border-amber-500/30 rounded-2xl flex items-center justify-between gap-3 shadow-inner">
             <div className="flex items-center gap-2.5 min-w-0">
               <AvatarBadge avatarId={savedUser.avatarId} size="sm" />
               <div className="truncate">
                 <div className="text-xs font-black text-amber-400 truncate">{savedUser.username}</div>
-                <div className="text-[10px] text-slate-400">{savedUser.rating || 1200} ELO • Saved on device</div>
+                <div className="text-[10px] text-slate-400">
+                  {savedUser.rating || 1200} ELO • Saved account
+                </div>
               </div>
             </div>
             <button
               type="button"
               onClick={handleQuickRestore}
               disabled={isSubmitting}
-              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs shrink-0 transition"
+              className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shrink-0 transition shadow flex items-center gap-1.5"
             >
-              1-Tap Log In
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>1-Tap Play</span>
             </button>
           </div>
         )}
@@ -463,7 +370,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   required
                   value={loginIdentifier}
                   onChange={(e) => setLoginIdentifier(e.target.value)}
-                  placeholder="e.g., CheckersKing or +256700000000"
+                  placeholder="e.g., CheckersMaster or +256700000000"
                   className="w-full pl-10 pr-4 py-3 bg-slate-950 border border-slate-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl text-slate-100 placeholder-slate-600 text-xs font-semibold transition"
                 />
               </div>
@@ -476,7 +383,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 onChange={(e) => setRememberMe(e.target.checked)}
                 className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500 bg-slate-950 border-slate-700"
               />
-              <span className="text-xs text-slate-300 font-medium">Keep me logged in on this app</span>
+              <span className="text-xs text-slate-300 font-medium">Keep me logged in on this device</span>
             </label>
 
             <button
@@ -489,74 +396,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               ) : (
                 <>
                   <LogIn className="w-4 h-4" />
-                  <span>Log In In-App Now</span>
+                  <span>Log In to Arena</span>
                 </>
               )}
             </button>
-
-            <div className="relative flex py-1 items-center">
-              <div className="flex-grow border-t border-slate-800"></div>
-              <span className="flex-shrink mx-3 text-[10px] uppercase font-bold text-slate-500">Or sign in with</span>
-              <div className="flex-grow border-t border-slate-800"></div>
-            </div>
           </form>
         )}
 
-        {/* Social Authentication Options: Google & Apple (In-App) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          {/* Google Sign In */}
-          <button
-            type="button"
-            onClick={handleGoogleAuth}
-            disabled={isSubmitting}
-            className="w-full py-3 px-4 rounded-2xl bg-slate-950 hover:bg-slate-800 border border-slate-700 text-slate-100 font-bold text-xs shadow-md transition flex items-center justify-center gap-2.5 disabled:opacity-50"
-          >
-            <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-              <path
-                fill="#EA4335"
-                d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.7 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.2 9 5 12 5z"
-              />
-              <path
-                fill="#4285F4"
-                d="M23.5 12.3c0-.8-.1-1.7-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.9 7.3C.7 9.7 0 12.3 0 15s.7 5.3 1.9 7.7l3.7-2.9c-.2-.7-.4-1.5-.4-2.3z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.2-6.4-5.2L1.9 16c1.8 3.7 5.6 7 10.1 7z"
-              />
-            </svg>
-            <span>Google In-App</span>
-          </button>
-
-          {/* Apple Sign In */}
-          <button
-            type="button"
-            onClick={handleAppleAuth}
-            disabled={isSubmitting}
-            className="w-full py-3 px-4 rounded-2xl bg-slate-950 hover:bg-slate-800 border border-slate-700 text-slate-100 font-bold text-xs shadow-md transition flex items-center justify-center gap-2.5 disabled:opacity-50"
-          >
-            <svg className="w-4 h-4 shrink-0 fill-current text-white" viewBox="0 0 170 170">
-              <path d="M150.37 130.25c-2.45 5.66-5.35 10.87-8.71 15.66-4.58 6.53-8.33 11.05-11.22 13.56-4.48 4.12-9.28 6.23-14.42 6.35-3.69 0-8.14-1.05-13.32-3.18-5.19-2.12-9.97-3.17-14.34-3.17-4.58 0-9.49 1.05-14.75 3.17-5.26 2.13-9.5 3.24-12.74 3.35-4.34.13-9.16-1.9-14.49-6.1-3.23-2.63-7.14-7.27-11.72-13.92-7.85-11.45-13.88-24.12-18.09-38.01-4.21-13.89-6.32-26.68-6.32-38.37 0-16.14 3.92-29.6 11.76-40.38 7.84-10.78 17.82-16.29 29.93-16.53 4.84 0 10.08 1.15 15.72 3.44 5.64 2.29 9.68 3.44 12.12 3.44 2.18 0 6.33-1.22 12.45-3.66 6.12-2.44 11.48-3.53 16.08-3.28 12.45.62 22.42 5.22 29.9 13.8 2.06 2.45 3.86 4.97 5.39 7.57-11.33 6.83-16.86 16.52-16.6 29.07.26 10.16 4.22 18.66 11.89 25.49 7.67 6.83 16.78 10.51 27.33 11.04-2.58 8.08-6.07 16.32-10.47 24.72zM119.22 31.96c0-7.72 2.76-15.11 8.28-22.17 5.52-7.06 12.46-11.23 20.82-12.51.27.9.41 1.8.41 2.7 0 7.7-2.85 15.17-8.55 22.41-5.7 7.24-12.67 11.41-20.9 12.51-.03-.94-.06-1.92-.06-2.94z"/>
-            </svg>
-            <span>Apple In-App</span>
-          </button>
-        </div>
-
-        {/* Sign Up Form Details */}
+        {/* In-App Sign Up Form */}
         {mode === 'signup' && (
-          <form onSubmit={handleSignUp} className="space-y-3.5 pt-2 border-t border-slate-800">
-            <p className="text-[11px] font-bold text-amber-400 uppercase tracking-wider">
-              Enter Player Profile Details:
-            </p>
-
+          <form onSubmit={handleSignUp} className="space-y-3.5 pt-1">
             {/* Real Name */}
             <div className="space-y-1">
               <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-300">
-                Real Name
+                Full Name
               </label>
               <div className="relative">
                 <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -584,7 +437,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 )}
                 {usernameStatus === 'available' && (
                   <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-bold">
-                    <CheckCircle2 className="w-3 h-3" /> Available!
+                    <CheckCircle2 className="w-3 h-3" /> Available in Firestore!
                   </span>
                 )}
               </div>
@@ -638,7 +491,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 Choose Player Avatar
               </label>
               <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">
-                {AVATAR_OPTIONS.slice(0, 8).map((avatar) => {
+                {AVATAR_OPTIONS.map((avatar) => {
                   const isSelected = avatar.id === selectedAvatarId;
                   return (
                     <button
@@ -703,6 +556,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </button>
           </form>
         )}
+
+        <div className="pt-2 text-center text-[10px] text-slate-500 flex items-center justify-center gap-1.5">
+          <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+          <span>Real-time Cloud Sync with Firebase Firestore Backend</span>
+        </div>
       </div>
     </div>
   );

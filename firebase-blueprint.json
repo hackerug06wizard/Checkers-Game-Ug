@@ -1,0 +1,67 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account and profile data for Checkers Arena",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier for the user" },
+        "username": { "type": "string", "description": "Display username" },
+        "usernameLowercase": { "type": "string", "description": "Lowercase username for indexed uniqueness lookups" },
+        "realName": { "type": "string", "description": "Full name of the user" },
+        "phoneNumber": { "type": "string", "description": "Phone number" },
+        "avatarId": { "type": "string", "description": "Selected avatar identifier" },
+        "rating": { "type": "number", "description": "ELO Rating" },
+        "elo": { "type": "number", "description": "ELO Rating fallback" },
+        "wins": { "type": "number", "description": "Total matches won" },
+        "losses": { "type": "number", "description": "Total matches lost" },
+        "draws": { "type": "number", "description": "Total matches drawn" },
+        "gamesPlayed": { "type": "number", "description": "Total games played" },
+        "status": { "type": "string", "description": "Current status", "enum": ["online", "in_game", "offline"] },
+        "isOnline": { "type": "boolean", "description": "Whether user is currently connected" },
+        "lastActiveTimestamp": { "type": "number", "description": "Last active unix timestamp" },
+        "createdAt": { "type": "number", "description": "Creation unix timestamp" }
+      },
+      "required": ["id", "username", "rating"]
+    },
+    "GameRoom": {
+      "title": "GameRoom",
+      "description": "Active checkers game room",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique room identifier" },
+        "name": { "type": "string", "description": "Room name" },
+        "status": { "type": "string", "description": "Room state", "enum": ["waiting", "playing", "ended"] },
+        "createdAt": { "type": "number", "description": "Creation timestamp" }
+      },
+      "required": ["id", "name", "status"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Global or game chat reaction/message",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique message id" },
+        "senderId": { "type": "string", "description": "Sender user ID" },
+        "senderName": { "type": "string", "description": "Sender display username" },
+        "text": { "type": "string", "description": "Message text or emoji" },
+        "timestamp": { "type": "number", "description": "Message timestamp" }
+      },
+      "required": ["id", "senderId", "senderName", "text", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Collection of all user profiles and leaderboard stats"
+    },
+    "/rooms/{roomId}": {
+      "schema": "GameRoom",
+      "description": "Active and finished multiplayer match rooms"
+    },
+    "/chat/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Lobby and live game messages"
+    }
+  }
+}
