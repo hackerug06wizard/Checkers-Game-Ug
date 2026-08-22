@@ -8,12 +8,13 @@ import {
   MoveOption,
 } from './types';
 import { Header } from './components/Header';
-import { AuthModal } from './components/AuthModal';
+import { BottomAuthSheet } from './components/BottomAuthSheet';
+import { SettingsModal } from './components/SettingsModal';
+import { BoardTheme } from './components/CheckersBoard';
 import { OnlineLobby } from './components/OnlineLobby';
 import { GameRoom as GameRoomComponent } from './components/GameRoom';
 import { LeaderboardModal } from './components/LeaderboardModal';
 import { ProfileModal } from './components/ProfileModal';
-import { AndroidInstallModal } from './components/AndroidInstallModal';
 import { AvatarBadge } from './components/AvatarBadge';
 import { sounds } from './lib/sound';
 import {
@@ -23,6 +24,8 @@ import {
   subscribeToOnlineUsers,
   updatePresenceHeartbeat,
   getUserProfileFromFirestore,
+  deleteUserAccount,
+  logOutUser,
 } from './lib/firebase';
 import {
   createInitialBoard,
@@ -38,16 +41,20 @@ export default function App() {
   const [gameRooms, setGameRooms] = useState<GameRoom[]>([]);
   const [activeRoom, setActiveRoom] = useState<GameRoom | null>(null);
   const [incomingChallenge, setIncomingChallenge] = useState<Challenge | null>(null);
-  const [lobbyChatMessages, setLobbyChatMessages] = useState<ChatMessage[]>([]);
   const [gameChatMessages, setGameChatMessages] = useState<ChatMessage[]>([]);
   const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
 
-  // Modals
+  // Modals & Preferences
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isLeaderboardModalOpen, setIsLeaderboardModalOpen] = useState(false);
-  const [isAndroidInstallModalOpen, setIsAndroidInstallModalOpen] = useState(false);
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('checkers_sound_enabled') !== 'false';
+  });
+  const [boardTheme, setBoardTheme] = useState<BoardTheme>(() => {
+    return (localStorage.getItem('checkers_board_theme') as BoardTheme) || 'wood';
+  });
   const [notification, setNotification] = useState<{ message: string; type?: 'info' | 'error' } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -191,12 +198,10 @@ export default function App() {
               }
 
               case 'chat:history': {
-                setLobbyChatMessages(payload);
                 break;
               }
 
               case 'chat:lobby_message': {
-                setLobbyChatMessages((prev) => [...prev.slice(-80), payload]);
                 break;
               }
 
@@ -300,12 +305,6 @@ export default function App() {
     setTimeout(() => {
       setNotification(null);
     }, 4000);
-  };
-
-  const handleToggleSound = () => {
-    const next = !soundEnabled;
-    setSoundEnabled(next);
-    sounds.setEnabled(next);
   };
 
   const handleAuthSuccess = (userProfile: UserProfile) => {
@@ -629,26 +628,9 @@ export default function App() {
     setGameChatMessages([]);
   };
 
-  const handleSendLobbyChat = (text: string) => {
-    sounds.playEmojiSound();
-    sendWs('chat:send', { text });
-
-    if (currentUser) {
-      const newMsg: ChatMessage = {
-        id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        senderId: currentUser.id,
-        senderName: currentUser.username,
-        avatarId: currentUser.avatarId,
-        text,
-        timestamp: Date.now(),
-      };
-      setLobbyChatMessages((prev) => [...prev.slice(-80), newMsg]);
-    }
-  };
-
   const handleSendGameChat = (text: string) => {
     if (!activeRoom) return;
-    sounds.playEmojiSound();
+    sounds.playBlast();
     sendWs('chat:send', { text, roomId: activeRoom.id });
 
     if (currentUser) {
@@ -678,6 +660,40 @@ export default function App() {
     }
   };
 
+  const handleToggleSound = () => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    sounds.setEnabled(next);
+    localStorage.setItem('checkers_sound_enabled', String(next));
+  };
+
+  const handleChangeTheme = (theme: BoardTheme) => {
+    setBoardTheme(theme);
+    localStorage.setItem('checkers_board_theme', theme);
+  };
+
+  const handleLogout = async () => {
+    setIsSettingsModalOpen(false);
+    await logOutUser();
+    setCurrentUser(null);
+    setIsAuthModalOpen(true);
+    showNotification('Logged out successfully', 'info');
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!currentUser) return;
+    try {
+      setIsSettingsModalOpen(false);
+      await deleteUserAccount(currentUser.id);
+      setCurrentUser(null);
+      setIsAuthModalOpen(true);
+      showNotification('Account permanently deleted', 'info');
+    } catch (e: any) {
+      console.error('Delete account error:', e);
+      showNotification('Failed to delete account. Please try again.', 'error');
+    }
+  };
+
   const handleUpdateProfile = (avatarId: string, username?: string) => {
     if (!currentUser) return;
     const newUsername = username?.trim() || currentUser.username;
@@ -699,7 +715,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col selection:bg-amber-500 selection:text-slate-950">
+    <div className="h-screen max-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col selection:bg-amber-500 selection:text-slate-950 overflow-hidden">
       {/* Toast Notification */}
       {notification && (
         <div
@@ -717,21 +733,18 @@ export default function App() {
       {/* Header Bar */}
       <Header
         currentUser={currentUser}
-        onlineCount={onlineUsers.length}
-        soundEnabled={soundEnabled}
-        onToggleSound={handleToggleSound}
         onOpenLeaderboard={handleOpenLeaderboard}
         onOpenProfile={() => setIsProfileModalOpen(true)}
         onOpenAuth={() => setIsAuthModalOpen(true)}
-        onOpenAndroidInstall={() => setIsAndroidInstallModalOpen(true)}
       />
 
-      {/* Main Container View */}
-      <main className="flex-1 pb-12">
+      {/* Main Container View (Static, no scrolling) */}
+      <main className="flex-1 overflow-hidden min-h-0">
         {activeRoom ? (
           <GameRoomComponent
             room={activeRoom}
             currentUser={currentUser || { id: '', username: 'Guest', avatarId: 'avatar-crown', wins: 0, losses: 0, draws: 0, rating: 1200, status: 'online', createdAt: Date.now() }}
+            activeTheme={boardTheme}
             onSendMove={handleSendMove}
             onResign={handleResign}
             onLeaveRoom={handleLeaveRoom}
@@ -743,53 +756,31 @@ export default function App() {
             currentUser={currentUser}
             onlineUsers={onlineUsers}
             gameRooms={gameRooms}
-            chatMessages={lobbyChatMessages}
             onSendChallenge={handleSendChallenge}
             onCreateCustomGame={handleCreateCustomGame}
             onJoinGameRoom={handleJoinGameRoom}
-            onSendChatMessage={handleSendLobbyChat}
             onOpenLeaderboard={handleOpenLeaderboard}
+            onOpenSettings={() => setIsSettingsModalOpen(true)}
           />
         ) : (
-          <div className="flex items-center justify-center min-h-[70vh] px-4">
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 max-w-md w-full text-center space-y-6 shadow-2xl">
-              <div className="w-16 h-16 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto" />
+          <div className="flex items-center justify-center h-full px-4">
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 max-w-md w-full text-center space-y-5 shadow-2xl">
+              <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto" />
               
-              <div className="space-y-2">
-                <h2 className="text-xl font-black text-white">Connecting to Checkers Arena</h2>
+              <div className="space-y-1">
+                <h2 className="text-xl font-black text-white">Checkers Arena</h2>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Initializing real-time game server and account syncing. Please log in or create an account to start playing!
+                  Sign in with your device Google Account to start playing real-time online matches!
                 </p>
               </div>
 
-              <div className="space-y-3 pt-2">
+              <div className="space-y-2.5 pt-1">
                 <button
                   type="button"
                   onClick={() => setIsAuthModalOpen(true)}
                   className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 via-amber-400 to-red-500 hover:from-amber-400 hover:to-red-400 text-slate-950 font-black text-sm shadow-xl shadow-amber-950/30 transition transform active:scale-95"
                 >
-                  Create Account / Log In
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const guestUser: UserProfile = {
-                      id: 'guest_' + Math.random().toString(36).substr(2, 9),
-                      username: 'GuestPlayer',
-                      avatarId: 'avatar-crown',
-                      wins: 0,
-                      losses: 0,
-                      draws: 0,
-                      rating: 1200,
-                      status: 'online',
-                      createdAt: Date.now(),
-                    };
-                    setCurrentUser(guestUser);
-                  }}
-                  className="w-full py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition"
-                >
-                  Continue as Guest
+                  Sign In with Google
                 </button>
               </div>
             </div>
@@ -797,11 +788,24 @@ export default function App() {
         )}
       </main>
 
-      {/* Modals */}
-      <AuthModal
+      {/* Bottom Sheet Auth Panel */}
+      <BottomAuthSheet
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
-        onAuthSuccess={handleAuthSuccess}
+        onLoginSuccess={handleAuthSuccess}
+        defaultEmail="hackerug06@gmail.com"
+      />
+
+      {/* Settings Modal (Theme, Audio, Logout, Account Deletion Confirmation) */}
+      <SettingsModal
+        isOpen={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+        currentTheme={boardTheme}
+        onChangeTheme={handleChangeTheme}
+        soundEnabled={soundEnabled}
+        onToggleSound={handleToggleSound}
+        onLogout={handleLogout}
+        onDeleteAccount={handleDeleteAccount}
       />
 
       {currentUser && (
@@ -819,11 +823,6 @@ export default function App() {
         entries={leaderboardEntries}
       />
 
-      <AndroidInstallModal
-        isOpen={isAndroidInstallModalOpen}
-        onClose={() => setIsAndroidInstallModalOpen(false)}
-      />
-
       {/* Incoming Match Challenge Dialog Overlay */}
       {incomingChallenge && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in">
@@ -835,7 +834,7 @@ export default function App() {
             <div className="space-y-1">
               <h3 className="text-lg font-black text-white">Incoming Match Challenge!</h3>
               <p className="text-xs text-slate-400">
-                <strong className="text-amber-400">{incomingChallenge.fromUser.username}</strong> ({incomingChallenge.fromUser.rating} ELO) has challenged you to a checkers match!
+                <strong className="text-amber-400">{incomingChallenge.fromUser.username}</strong> ({incomingChallenge.fromUser.rating || incomingChallenge.fromUser.elo || 1200} ELO) has challenged you to a checkers match!
               </p>
             </div>
 
@@ -846,13 +845,13 @@ export default function App() {
             <div className="flex gap-3">
               <button
                 onClick={() => handleRespondChallenge(false)}
-                className="flex-1 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition"
+                className="flex-1 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition active:scale-95"
               >
                 Decline
               </button>
               <button
                 onClick={() => handleRespondChallenge(true)}
-                className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-red-500 hover:from-amber-400 hover:to-red-400 text-slate-950 font-black text-xs shadow-lg transition"
+                className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-red-500 hover:from-amber-400 hover:to-red-400 text-slate-950 font-black text-xs shadow-lg transition active:scale-95"
               >
                 Accept Challenge
               </button>

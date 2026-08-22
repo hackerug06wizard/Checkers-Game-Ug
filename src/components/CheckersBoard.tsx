@@ -79,6 +79,7 @@ interface CheckersBoardProps {
   onSelectPiece: (pos: Position | null) => void;
   onExecuteMove: (move: MoveOption) => void;
   lastMove: { from: Position; to: Position } | null;
+  theme?: BoardTheme;
 }
 
 export const CheckersBoard: React.FC<CheckersBoardProps> = ({
@@ -90,11 +91,15 @@ export const CheckersBoard: React.FC<CheckersBoardProps> = ({
   onSelectPiece,
   onExecuteMove,
   lastMove,
+  theme,
 }) => {
-  const [activeTheme, setActiveTheme] = useState<BoardTheme>('wood');
+  const [internalTheme, setInternalTheme] = useState<BoardTheme>(() => {
+    return (localStorage.getItem('checkers_board_theme') as BoardTheme) || 'wood';
+  });
   const [showThemePicker, setShowThemePicker] = useState(false);
 
-  const template = BOARD_TEMPLATES[activeTheme];
+  const activeTheme = theme || internalTheme;
+  const template = BOARD_TEMPLATES[activeTheme] || BOARD_TEMPLATES.wood;
 
   // Flip board if player is Black so Black is at bottom
   const isFlipped = playerColor === 'black';
@@ -165,7 +170,8 @@ export const CheckersBoard: React.FC<CheckersBoardProps> = ({
               <button
                 key={themeKey}
                 onClick={() => {
-                  setActiveTheme(themeKey);
+                  setInternalTheme(themeKey);
+                  localStorage.setItem('checkers_board_theme', themeKey);
                   setShowThemePicker(false);
                 }}
                 className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition flex items-center justify-between ${
