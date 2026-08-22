@@ -7,48 +7,49 @@ interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentTheme: BoardTheme;
-  onSelectTheme: (theme: BoardTheme) => void;
+  onSelectTheme?: (theme: BoardTheme) => void;
+  onChangeTheme?: (theme: BoardTheme) => void;
   soundEnabled: boolean;
   onToggleSound: () => void;
   onLogout: () => void;
   onDeleteAccount: () => void;
 }
 
-const THEME_OPTIONS: { id: BoardTheme; name: string; darkColor: string; lightColor: string; accent: string }[] = [
+const THEME_OPTIONS: { id: BoardTheme; name: string; darkHex: string; lightHex: string; borderHex: string }[] = [
   {
     id: 'wood',
     name: 'Classic Mahogany',
-    darkColor: 'bg-[#2a1e17]',
-    lightColor: 'bg-[#e3d1b6]',
-    accent: 'text-amber-400 border-amber-600',
+    darkHex: '#3b2314',
+    lightHex: '#e6d5be',
+    borderHex: '#78350f',
   },
   {
     id: 'crimson',
     name: 'Royal Crimson',
-    darkColor: 'bg-[#4a0e17]',
-    lightColor: 'bg-[#f4e4bc]',
-    accent: 'text-rose-400 border-rose-600',
+    darkHex: '#581420',
+    lightHex: '#fcecd3',
+    borderHex: '#e11d48',
   },
   {
     id: 'neon',
     name: 'Cyberpunk Neon',
-    darkColor: 'bg-[#0f172a]',
-    lightColor: 'bg-[#1e293b]',
-    accent: 'text-cyan-400 border-cyan-500',
+    darkHex: '#0b1329',
+    lightHex: '#1e293b',
+    borderHex: '#06b6d4',
   },
   {
     id: 'emerald',
     name: 'Emerald Marble',
-    darkColor: 'bg-[#064e3b]',
-    lightColor: 'bg-[#e2e8f0]',
-    accent: 'text-emerald-400 border-emerald-500',
+    darkHex: '#064e3b',
+    lightHex: '#dcfce7',
+    borderHex: '#10b981',
   },
   {
     id: 'slate',
     name: 'Midnight Steel',
-    darkColor: 'bg-[#18181b]',
-    lightColor: 'bg-[#cbd5e1]',
-    accent: 'text-slate-300 border-slate-500',
+    darkHex: '#18181b',
+    lightHex: '#cbd5e1',
+    borderHex: '#64748b',
   },
 ];
 
@@ -57,6 +58,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   currentTheme,
   onSelectTheme,
+  onChangeTheme,
   soundEnabled,
   onToggleSound,
   onLogout,
@@ -67,6 +69,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
 
   if (!isOpen) return null;
+
+  const handleThemeChange = (themeId: BoardTheme) => {
+    sounds.playMove();
+    if (onChangeTheme) onChangeTheme(themeId);
+    if (onSelectTheme) onSelectTheme(themeId);
+    localStorage.setItem('checkers_board_theme', themeId);
+  };
 
   const isDeleteConfirmed = deleteInputText.trim() === 'Delete my account';
 
@@ -120,15 +129,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 return (
                   <button
                     key={theme.id}
-                    onClick={() => {
-                      onSelectTheme(theme.id);
-                      sounds.playMove();
-                    }}
+                    onClick={() => handleThemeChange(theme.id)}
                     className={`p-3 rounded-2xl border text-left transition flex flex-col justify-between gap-2.5 relative group ${
                       isSelected
-                        ? `bg-slate-950 ${theme.accent} ring-2 ring-amber-400/50 shadow-lg`
+                        ? 'bg-slate-950 ring-2 ring-amber-400 shadow-lg shadow-amber-500/20'
                         : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
                     }`}
+                    style={{ borderColor: isSelected ? theme.borderHex : undefined }}
                   >
                     <div className="flex items-center justify-between w-full">
                       <span className="text-xs font-bold text-slate-200">{theme.name}</span>
@@ -136,11 +143,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
 
                     {/* Mini board preview tiles */}
-                    <div className="grid grid-cols-2 grid-rows-2 w-full h-8 rounded-lg overflow-hidden border border-slate-700/50">
-                      <div className={theme.lightColor} />
-                      <div className={theme.darkColor} />
-                      <div className={theme.darkColor} />
-                      <div className={theme.lightColor} />
+                    <div className="grid grid-cols-2 grid-rows-2 w-full h-8 rounded-lg overflow-hidden border border-slate-700/50 shadow-inner">
+                      <div style={{ backgroundColor: theme.lightHex }} />
+                      <div style={{ backgroundColor: theme.darkHex }} />
+                      <div style={{ backgroundColor: theme.darkHex }} />
+                      <div style={{ backgroundColor: theme.lightHex }} />
                     </div>
                   </button>
                 );

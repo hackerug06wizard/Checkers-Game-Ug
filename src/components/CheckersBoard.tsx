@@ -1,72 +1,84 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckersPiece, MoveOption, PieceColor, Position } from '../types';
-import { Crown, Palette } from 'lucide-react';
+import { Crown, Sparkles, Box, Maximize2 } from 'lucide-react';
 import { sounds } from '../lib/sound';
 
 export type BoardTheme = 'wood' | 'crimson' | 'neon' | 'emerald' | 'slate';
 
-interface BoardThemeConfig {
+export interface BoardThemeConfig {
   name: string;
-  darkSquare: string;
-  lightSquare: string;
-  selectedSquare: string;
-  targetSquare: string;
-  borderFrame: string;
-  labelColorDark: string;
-  labelColorLight: string;
+  darkHex: string;
+  lightHex: string;
+  frameHex: string;
+  borderHex: string;
+  selectedGlow: string;
+  targetHex: string;
+  labelDark: string;
+  labelLight: string;
+  tagColor: string;
 }
 
-const BOARD_TEMPLATES: Record<BoardTheme, BoardThemeConfig> = {
+export const BOARD_TEMPLATES: Record<BoardTheme, BoardThemeConfig> = {
   wood: {
     name: 'Classic Mahogany',
-    darkSquare: 'bg-[#2a1e17]',
-    lightSquare: 'bg-[#e3d1b6]',
-    selectedSquare: 'bg-amber-900/90 ring-4 ring-amber-400',
-    targetSquare: 'bg-emerald-900/90 border-2 border-emerald-400/80 shadow-inner',
-    borderFrame: 'border-amber-950/90 bg-slate-950',
-    labelColorDark: 'text-amber-200/30',
-    labelColorLight: 'text-amber-950/40',
+    darkHex: '#382215',
+    lightHex: '#e8d8be',
+    frameHex: '#1e1109',
+    borderHex: '#78350f',
+    selectedGlow: '#f59e0b',
+    targetHex: '#10b981',
+    labelDark: 'rgba(232, 216, 190, 0.45)',
+    labelLight: 'rgba(56, 34, 21, 0.5)',
+    tagColor: 'text-amber-400',
   },
   crimson: {
     name: 'Royal Crimson',
-    darkSquare: 'bg-[#4a0e17]',
-    lightSquare: 'bg-[#f4e4bc]',
-    selectedSquare: 'bg-rose-900/90 ring-4 ring-amber-400',
-    targetSquare: 'bg-emerald-950/90 border-2 border-amber-300 shadow-inner',
-    borderFrame: 'border-rose-950/90 bg-slate-950',
-    labelColorDark: 'text-amber-200/30',
-    labelColorLight: 'text-rose-950/40',
+    darkHex: '#52101a',
+    lightHex: '#faebd7',
+    frameHex: '#25050b',
+    borderHex: '#e11d48',
+    selectedGlow: '#fb7185',
+    targetHex: '#34d399',
+    labelDark: 'rgba(250, 235, 215, 0.45)',
+    labelLight: 'rgba(82, 16, 26, 0.5)',
+    tagColor: 'text-rose-400',
   },
   neon: {
     name: 'Cyberpunk Neon',
-    darkSquare: 'bg-[#0f172a]',
-    lightSquare: 'bg-[#1e293b]',
-    selectedSquare: 'bg-cyan-950/90 ring-4 ring-cyan-400 shadow-lg shadow-cyan-500/50',
-    targetSquare: 'bg-fuchsia-950/90 border-2 border-fuchsia-400 shadow-inner',
-    borderFrame: 'border-cyan-900/80 bg-slate-950',
-    labelColorDark: 'text-cyan-400/40',
-    labelColorLight: 'text-slate-400/40',
+    darkHex: '#091022',
+    lightHex: '#1e293b',
+    frameHex: '#020617',
+    borderHex: '#06b6d4',
+    selectedGlow: '#22d3ee',
+    targetHex: '#e879f9',
+    labelDark: 'rgba(34, 211, 238, 0.5)',
+    labelLight: 'rgba(148, 163, 184, 0.5)',
+    tagColor: 'text-cyan-400',
   },
   emerald: {
     name: 'Emerald Marble',
-    darkSquare: 'bg-[#064e3b]',
-    lightSquare: 'bg-[#e2e8f0]',
-    selectedSquare: 'bg-emerald-800/90 ring-4 ring-emerald-300',
-    targetSquare: 'bg-amber-950/90 border-2 border-amber-400 shadow-inner',
-    borderFrame: 'border-emerald-950/90 bg-slate-950',
-    labelColorDark: 'text-emerald-200/30',
-    labelColorLight: 'text-emerald-950/40',
+    darkHex: '#064e3b',
+    lightHex: '#dcfce7',
+    frameHex: '#022119',
+    borderHex: '#10b981',
+    selectedGlow: '#34d399',
+    targetHex: '#fbbf24',
+    labelDark: 'rgba(220, 252, 231, 0.45)',
+    labelLight: 'rgba(6, 78, 59, 0.5)',
+    tagColor: 'text-emerald-400',
   },
   slate: {
     name: 'Midnight Steel',
-    darkSquare: 'bg-[#18181b]',
-    lightSquare: 'bg-[#cbd5e1]',
-    selectedSquare: 'bg-slate-800/90 ring-4 ring-amber-400',
-    targetSquare: 'bg-blue-950/90 border-2 border-blue-400 shadow-inner',
-    borderFrame: 'border-slate-800 bg-slate-950',
-    labelColorDark: 'text-slate-400/30',
-    labelColorLight: 'text-slate-950/40',
+    darkHex: '#18181b',
+    lightHex: '#cbd5e1',
+    frameHex: '#09090b',
+    borderHex: '#64748b',
+    selectedGlow: '#f59e0b',
+    targetHex: '#60a5fa',
+    labelDark: 'rgba(203, 213, 225, 0.45)',
+    labelLight: 'rgba(24, 24, 27, 0.5)',
+    tagColor: 'text-slate-300',
   },
 };
 
@@ -80,6 +92,8 @@ interface CheckersBoardProps {
   onExecuteMove: (move: MoveOption) => void;
   lastMove: { from: Position; to: Position } | null;
   theme?: BoardTheme;
+  is3DTilted?: boolean;
+  onToggle3DTilt?: () => void;
 }
 
 export const CheckersBoard: React.FC<CheckersBoardProps> = ({
@@ -92,19 +106,26 @@ export const CheckersBoard: React.FC<CheckersBoardProps> = ({
   onExecuteMove,
   lastMove,
   theme,
+  is3DTilted = true,
+  onToggle3DTilt,
 }) => {
   const [internalTheme, setInternalTheme] = useState<BoardTheme>(() => {
     return (localStorage.getItem('checkers_board_theme') as BoardTheme) || 'wood';
   });
-  const [showThemePicker, setShowThemePicker] = useState(false);
+
+  useEffect(() => {
+    if (theme) {
+      setInternalTheme(theme);
+    }
+  }, [theme]);
 
   const activeTheme = theme || internalTheme;
   const template = BOARD_TEMPLATES[activeTheme] || BOARD_TEMPLATES.wood;
 
-  // Flip board if player is Black so Black is at bottom
+  // Flip board if player is Black so Black pieces are at the bottom
   const isFlipped = playerColor === 'black';
 
-  // Get list of destination positions for currently selected piece
+  // Destination positions for currently selected piece
   const selectedMoves = selectedPiecePos
     ? validMoveOptions.filter(
         (m) =>
@@ -153,173 +174,196 @@ export const CheckersBoard: React.FC<CheckersBoardProps> = ({
   };
 
   return (
-    <div className="relative flex flex-col items-center justify-center">
-      {/* Top Theme Selector Button */}
-      <div className="absolute -top-10 right-2 z-30 flex items-center gap-2">
-        <button
-          onClick={() => setShowThemePicker(!showThemePicker)}
-          className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-amber-400 font-bold text-xs shadow-lg transition"
+    <div className="relative flex flex-col items-center justify-center w-full max-h-full py-1">
+      {/* 3D Perspective Stage Container */}
+      <div
+        className="w-full flex items-center justify-center transition-all duration-500"
+        style={{
+          perspective: is3DTilted ? '1000px' : 'none',
+          perspectiveOrigin: '50% 50%',
+        }}
+      >
+        {/* Main Board Card */}
+        <div
+          className="w-[min(90vw,80vw,50vh,460px)] h-[min(90vw,80vw,50vh,460px)] aspect-square p-2 sm:p-3 rounded-2xl sm:rounded-3xl border-2 sm:border-4 select-none transition-all duration-500 flex flex-col justify-between"
+          style={{
+            backgroundColor: template.frameHex,
+            borderColor: template.borderHex,
+            transform: is3DTilted ? 'rotateX(22deg) scale(0.96)' : 'none',
+            transformStyle: 'preserve-3d',
+            boxShadow: is3DTilted
+              ? '0 30px 60px -15px rgba(0, 0, 0, 0.95), 0 10px 25px -5px rgba(0, 0, 0, 0.8), inset 0 2px 4px rgba(255, 255, 255, 0.12)'
+              : '0 20px 40px -10px rgba(0, 0, 0, 0.8), inset 0 2px 4px rgba(255, 255, 255, 0.1)',
+          }}
         >
-          <Palette className="w-3.5 h-3.5" />
-          <span>Theme: {template.name}</span>
-        </button>
+          {/* 8x8 Board Grid */}
+          <div className="w-full h-full grid grid-cols-8 grid-rows-8 rounded-xl sm:rounded-2xl overflow-hidden border border-black/40 relative shadow-inner">
+            {Array.from({ length: 8 }).map((_, displayR) => {
+              const r = isFlipped ? 7 - displayR : displayR;
 
-        {showThemePicker && (
-          <div className="absolute right-0 top-9 z-40 bg-slate-900 border border-amber-500/40 rounded-2xl p-2 shadow-2xl flex flex-col gap-1 w-44 animate-fade-in">
-            {(Object.keys(BOARD_TEMPLATES) as BoardTheme[]).map((themeKey) => (
-              <button
-                key={themeKey}
-                onClick={() => {
-                  setInternalTheme(themeKey);
-                  localStorage.setItem('checkers_board_theme', themeKey);
-                  setShowThemePicker(false);
-                }}
-                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                  activeTheme === themeKey
-                    ? 'bg-amber-500 text-slate-950 font-black'
-                    : 'text-slate-300 hover:bg-slate-800'
-                }`}
-              >
-                <span>{BOARD_TEMPLATES[themeKey].name}</span>
-                {activeTheme === themeKey && <span>✓</span>}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+              return Array.from({ length: 8 }).map((_, displayC) => {
+                const c = isFlipped ? 7 - displayC : displayC;
+                const isDarkSquare = (r + c) % 2 === 1;
+                const piece = board[r][c];
 
-      {/* Main Board Container - Screen-fitted Board Size */}
-      <div className={`w-[min(74vw,74vh)] h-[min(74vw,74vh)] aspect-square mx-auto p-1.5 sm:p-2.5 rounded-2xl sm:rounded-3xl border-2 sm:border-4 shadow-2xl flex flex-col justify-between select-none transition-all duration-300 ${template.borderFrame}`}>
-        {/* 8x8 Grid Container */}
-        <div className="w-full h-full grid grid-cols-8 grid-rows-8 rounded-xl sm:rounded-2xl overflow-hidden border border-slate-800/60 relative shadow-inner">
-          {Array.from({ length: 8 }).map((_, displayR) => {
-            const r = isFlipped ? 7 - displayR : displayR;
+                const isSelected =
+                  selectedPiecePos?.row === r && selectedPiecePos?.col === c;
 
-            return Array.from({ length: 8 }).map((_, displayC) => {
-              const c = isFlipped ? 7 - displayC : displayC;
-              const isDarkSquare = (r + c) % 2 === 1;
-              const piece = board[r][c];
+                const moveOption = selectedMoves.find(
+                  (m) => m.to.row === r && m.to.col === c
+                );
+                const isTargetSquare = !!moveOption;
 
-              const isSelected =
-                selectedPiecePos?.row === r && selectedPiecePos?.col === c;
-
-              const moveOption = selectedMoves.find(
-                (m) => m.to.row === r && m.to.col === c
-              );
-              const isTargetSquare = !!moveOption;
-
-              const isCapturedSquare = selectedMoves.some((m) =>
-                m.captures.some((cap) => cap.row === r && cap.col === c)
-              );
-
-              const hasAvailableMoves =
-                piece &&
-                piece.color === currentTurn &&
-                validMoveOptions.some(
-                  (m) => m.from.row === r && m.from.col === c
+                const isCapturedSquare = selectedMoves.some((m) =>
+                  m.captures.some((cap) => cap.row === r && cap.col === c)
                 );
 
-              const isLastMove = isLastMoveSquare(r, c);
+                const hasAvailableMoves =
+                  piece &&
+                  piece.color === currentTurn &&
+                  validMoveOptions.some(
+                    (m) => m.from.row === r && m.from.col === c
+                  );
 
-              return (
-                <div
-                  key={`${r}-${c}`}
-                  onClick={() => handleSquareClick(r, c)}
-                  className={`relative w-full h-full flex items-center justify-center transition-colors duration-150 cursor-pointer ${
-                    isDarkSquare
-                      ? isSelected
-                        ? template.selectedSquare
+                const isLastMove = isLastMoveSquare(r, c);
+
+                return (
+                  <div
+                    key={`${r}-${c}`}
+                    onClick={() => handleSquareClick(r, c)}
+                    className="relative w-full h-full flex items-center justify-center transition-colors duration-150 cursor-pointer"
+                    style={{
+                      backgroundColor: isDarkSquare
+                        ? isSelected
+                          ? `${template.selectedGlow}dd`
+                          : isTargetSquare
+                          ? `${template.targetHex}88`
+                          : isLastMove
+                          ? 'rgba(245, 158, 11, 0.25)'
+                          : template.darkHex
+                        : template.lightHex,
+                      boxShadow: isSelected
+                        ? `inset 0 0 12px ${template.selectedGlow}, 0 0 15px ${template.selectedGlow}`
                         : isTargetSquare
-                        ? template.targetSquare
-                        : isLastMove
-                        ? 'bg-amber-500/30'
-                        : template.darkSquare
-                      : template.lightSquare
-                  }`}
-                >
-                  {/* Square Notation Labels */}
-                  {displayR === 7 && (
-                    <span
-                      className={`absolute bottom-0.5 right-1 text-[8px] sm:text-[9px] font-extrabold ${
-                        isDarkSquare ? template.labelColorDark : template.labelColorLight
-                      }`}
-                    >
-                      {String.fromCharCode(65 + c)}
-                    </span>
-                  )}
-                  {displayC === 0 && (
-                    <span
-                      className={`absolute top-0.5 left-1 text-[8px] sm:text-[9px] font-extrabold ${
-                        isDarkSquare ? template.labelColorDark : template.labelColorLight
-                      }`}
-                    >
-                      {8 - r}
-                    </span>
-                  )}
-
-                  {/* Captured piece target ring */}
-                  {isCapturedSquare && (
-                    <div className="absolute inset-1 rounded-full border-2 border-dashed border-rose-500 animate-pulse pointer-events-none z-20" />
-                  )}
-
-                  {/* Landing Target Dot */}
-                  {isTargetSquare && !piece && (
-                    <div className="w-5 h-5 sm:w-8 sm:h-8 rounded-full bg-emerald-400 border-2 border-white shadow-lg shadow-emerald-400/80 animate-bounce z-10" />
-                  )}
-
-                  {/* Checkers Piece */}
-                  <AnimatePresence mode="popLayout">
-                    {piece && (
-                      <motion.div
-                        key={piece.id}
-                        initial={{ scale: 0.6, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0.2, opacity: 0 }}
-                        transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-                        className={`relative w-[84%] h-[84%] rounded-full flex items-center justify-center cursor-pointer shadow-xl transition-transform ${
-                          isSelected
-                            ? 'scale-110 ring-4 ring-amber-400 z-20 shadow-amber-500/80'
-                            : hasAvailableMoves && (playerColor === 'spectator' || piece.color === playerColor)
-                            ? 'ring-2 ring-amber-400/80 shadow-amber-500/40 hover:scale-105'
-                            : 'hover:scale-105'
-                        } ${
-                          piece.color === 'red'
-                            ? 'bg-gradient-to-tr from-rose-800 via-red-600 to-rose-400 border-2 border-rose-300/80 shadow-rose-950/60'
-                            : 'bg-gradient-to-tr from-slate-950 via-zinc-900 to-slate-700 border-2 border-slate-500/80 shadow-black/80'
-                        }`}
+                        ? `inset 0 0 10px ${template.targetHex}`
+                        : undefined,
+                    }}
+                  >
+                    {/* Square Notation Labels (Letters at bottom, Numbers at left) */}
+                    {displayR === 7 && (
+                      <span
+                        className="absolute bottom-0.5 right-1 text-[7px] sm:text-[8px] font-black pointer-events-none"
+                        style={{
+                          color: isDarkSquare ? template.labelDark : template.labelLight,
+                        }}
                       >
-                        {/* Inner Piece Ridge */}
-                        <div
-                          className={`w-[75%] h-[75%] rounded-full border-2 flex items-center justify-center ${
-                            piece.color === 'red'
-                              ? 'border-amber-300/60 bg-red-700/40'
-                              : 'border-slate-400/40 bg-zinc-800/40'
-                          }`}
-                        >
-                          {piece.type === 'king' && (
-                            <motion.div
-                              initial={{ scale: 0, rotate: -30 }}
-                              animate={{ scale: 1, rotate: 0 }}
-                              className="flex items-center justify-center"
-                            >
-                              <Crown
-                                className={`w-5 h-5 sm:w-7 sm:h-7 drop-shadow-md ${
-                                  piece.color === 'red'
-                                    ? 'text-amber-300'
-                                    : 'text-amber-400'
-                                }`}
-                              />
-                            </motion.div>
-                          )}
-                        </div>
-                      </motion.div>
+                        {String.fromCharCode(65 + c)}
+                      </span>
                     )}
-                  </AnimatePresence>
-                </div>
-              );
-            });
-          })}
+                    {displayC === 0 && (
+                      <span
+                        className="absolute top-0.5 left-1 text-[7px] sm:text-[8px] font-black pointer-events-none"
+                        style={{
+                          color: isDarkSquare ? template.labelDark : template.labelLight,
+                        }}
+                      >
+                        {8 - r}
+                      </span>
+                    )}
+
+                    {/* Captured Piece Target Outline Indicator */}
+                    {isCapturedSquare && (
+                      <div className="absolute inset-1 rounded-full border-2 border-dashed border-rose-500 animate-pulse pointer-events-none z-20" />
+                    )}
+
+                    {/* Target Move Landing Dot */}
+                    {isTargetSquare && !piece && (
+                      <motion.div
+                        initial={{ scale: 0.5 }}
+                        animate={{ scale: [0.8, 1.1, 0.8] }}
+                        transition={{ repeat: Infinity, duration: 1.5 }}
+                        className="w-3.5 h-3.5 sm:w-6 sm:h-6 rounded-full border-2 border-white shadow-lg pointer-events-none z-10"
+                        style={{
+                          backgroundColor: template.targetHex,
+                          boxShadow: `0 0 10px ${template.targetHex}`,
+                        }}
+                      />
+                    )}
+
+                    {/* Checkers Piece */}
+                    <AnimatePresence mode="popLayout">
+                      {piece && (
+                        <motion.div
+                          key={piece.id}
+                          initial={{ scale: 0.6, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          exit={{ scale: 0.2, opacity: 0 }}
+                          transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                          className={`relative w-[82%] h-[82%] rounded-full flex items-center justify-center cursor-pointer shadow-2xl transition-transform ${
+                            isSelected
+                              ? 'scale-110 z-20 ring-4 ring-amber-400'
+                              : hasAvailableMoves && (playerColor === 'spectator' || piece.color === playerColor)
+                              ? 'ring-2 ring-amber-400/90 hover:scale-105'
+                              : 'hover:scale-105'
+                          } ${
+                            piece.color === 'red'
+                              ? 'bg-gradient-to-tr from-rose-900 via-red-600 to-rose-400 border-2 border-rose-300 shadow-rose-950/80'
+                              : 'bg-gradient-to-tr from-slate-950 via-zinc-900 to-slate-750 border-2 border-slate-400 shadow-black/90'
+                          }`}
+                          style={{
+                            filter: is3DTilted
+                              ? 'drop-shadow(0 6px 4px rgba(0,0,0,0.65))'
+                              : 'drop-shadow(0 2px 3px rgba(0,0,0,0.5))',
+                          }}
+                        >
+                          {/* Inner Circular Piece Groove */}
+                          <div
+                            className={`w-[74%] h-[74%] rounded-full border-2 flex items-center justify-center shadow-inner ${
+                              piece.color === 'red'
+                                ? 'border-amber-300/70 bg-red-700/50'
+                                : 'border-slate-400/50 bg-zinc-800/50'
+                            }`}
+                          >
+                            {/* Crown for King Piece */}
+                            {piece.type === 'king' && (
+                              <motion.div
+                                initial={{ scale: 0, rotate: -30 }}
+                                animate={{ scale: 1, rotate: 0 }}
+                                className="flex items-center justify-center"
+                              >
+                                <Crown
+                                  className={`w-4 h-4 sm:w-6 sm:h-6 drop-shadow-lg ${
+                                    piece.color === 'red'
+                                      ? 'text-amber-300'
+                                      : 'text-amber-400'
+                                  }`}
+                                />
+                              </motion.div>
+                            )}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                );
+              });
+            })}
+          </div>
         </div>
+      </div>
+
+      {/* Tilted Tabletop Status Bar & Switcher */}
+      <div className="mt-2 flex items-center justify-center gap-2">
+        {onToggle3DTilt && (
+          <button
+            onClick={onToggle3DTilt}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 text-[11px] font-bold text-slate-300 hover:text-amber-400 transition shadow active:scale-95"
+            title="Toggle 3D Tabletop Tilted Angle vs 2D Flat View"
+          >
+            <Box className="w-3.5 h-3.5 text-amber-400" />
+            <span>Format: {is3DTilted ? '📐 3D Tilted Tabletop' : 'Flat 2D View'}</span>
+          </button>
+        )}
       </div>
     </div>
   );
