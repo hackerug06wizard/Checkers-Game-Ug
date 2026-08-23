@@ -107,7 +107,23 @@ function broadcast(type: string, payload: any) {
 
 // Helper: Send message to specific user
 function sendToUser(userId: string, type: string, payload: any) {
-  const ws = userSockets.get(userId);
+  let ws = userSockets.get(userId);
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    const targetUser = usersMap.get(userId);
+    for (const [uid, sock] of userSockets.entries()) {
+      if (sock.readyState === WebSocket.OPEN) {
+        if (uid === userId) {
+          ws = sock;
+          break;
+        }
+        const u = usersMap.get(uid);
+        if (targetUser && u && u.username.toLowerCase() === targetUser.username.toLowerCase()) {
+          ws = sock;
+          break;
+        }
+      }
+    }
+  }
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type, payload }));
   }
@@ -520,8 +536,8 @@ wss.on('connection', (ws: WebSocket) => {
           const user = usersMap.get(currentUserId);
           if (!user) return;
 
-          const { name, vsBot, timeLimit } = payload;
-          const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          const { name, vsBot, timeLimit, roomId: customRoomId } = payload;
+          const roomId = customRoomId || `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           const initialBoard = createInitialBoard();
 
           const humanPlayer: GamePlayer = {
@@ -927,14 +943,11 @@ function handleGameEnd(room: GameRoom) {
 
 // Broadcast message to room players and spectators
 function broadcastToRoom(room: GameRoom, type: string, payload: any) {
-  const msg = JSON.stringify({ type, payload });
-  if (room.redPlayer && userSockets.has(room.redPlayer.id)) {
-    const ws = userSockets.get(room.redPlayer.id);
-    if (ws?.readyState === WebSocket.OPEN) ws.send(msg);
+  if (room.redPlayer) {
+    sendToUser(room.redPlayer.id, type, payload);
   }
-  if (room.blackPlayer && userSockets.has(room.blackPlayer.id)) {
-    const ws = userSockets.get(room.blackPlayer.id);
-    if (ws?.readyState === WebSocket.OPEN) ws.send(msg);
+  if (room.blackPlayer) {
+    sendToUser(room.blackPlayer.id, type, payload);
   }
 }
 

@@ -192,7 +192,12 @@ export const GameRoom: React.FC<GameRoomProps> = ({
 
         {/* Center: Turn Timer Badge & Status */}
         <div className="flex items-center gap-2 min-w-0">
-          {room.status === 'playing' ? (
+          {room.status === 'waiting' ? (
+            <div className="flex items-center gap-1.5 bg-amber-950/80 text-amber-300 font-black text-[11px] sm:text-xs px-3 py-1 rounded-full border border-amber-600/80 shadow animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+              <span>WAITING FOR OPPONENT TO JOIN TABLE...</span>
+            </div>
+          ) : room.status === 'playing' ? (
             isMyTurn ? (
               <div className="flex items-center gap-1.5 bg-emerald-950 text-emerald-300 font-black text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-1 rounded-full border border-emerald-600 shadow animate-pulse">
                 <Sparkles className="w-3 h-3 text-emerald-400" />

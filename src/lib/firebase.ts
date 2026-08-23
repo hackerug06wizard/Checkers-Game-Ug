@@ -476,6 +476,26 @@ export async function saveGameRoomToFirestore(room: GameRoom): Promise<void> {
   }
 }
 
+export function subscribeToAllGameRooms(callback: (rooms: GameRoom[]) => void) {
+  try {
+    const q = query(collection(db, 'rooms'), limit(30));
+    return onSnapshot(q, (snapshot) => {
+      const rooms: GameRoom[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as GameRoom;
+        if (data && (data.status === 'waiting' || data.status === 'playing')) {
+          rooms.push(data);
+        }
+      });
+      rooms.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      callback(rooms);
+    });
+  } catch (e) {
+    console.warn('subscribeToAllGameRooms error:', e);
+    return () => {};
+  }
+}
+
 export function subscribeToGameRoom(roomId: string, callback: (room: GameRoom | null) => void) {
   try {
     const roomRef = doc(db, 'rooms', roomId);

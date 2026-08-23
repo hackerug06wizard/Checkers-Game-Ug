@@ -31,6 +31,8 @@ import {
   respondToChallengeInFirestore,
   subscribeToChallengeDoc,
   subscribeToGameRoom,
+  subscribeToAllGameRooms,
+  saveGameRoomToFirestore,
 } from './lib/firebase';
 import {
   createInitialBoard,
@@ -312,6 +314,19 @@ export default function App() {
       setLeaderboardEntries(boardUsers);
     });
 
+    const unsubscribeGameRooms = subscribeToAllGameRooms((rooms) => {
+      setGameRooms((prev) => {
+        const map = new Map<string, GameRoom>();
+        rooms.forEach((r) => map.set(r.id, r));
+        prev.forEach((r) => {
+          if (!map.has(r.id)) map.set(r.id, r);
+        });
+        return Array.from(map.values()).filter(
+          (r) => r.status === 'waiting' || r.status === 'playing'
+        );
+      });
+    });
+
     // Refresh saved user profile from Firestore if available
     try {
       const savedUserRaw = localStorage.getItem('checkers_user_profile');
@@ -333,6 +348,7 @@ export default function App() {
     return () => {
       unsubscribePresence();
       unsubscribeLeaderboard();
+      unsubscribeGameRooms();
     };
   }, []);
 
@@ -364,6 +380,21 @@ export default function App() {
       unsubscribeChallenges();
     };
   }, [currentUser]);
+
+  // Keep active multiplayer room synchronized in real time
+  useEffect(() => {
+    if (!activeRoom?.id || activeRoom.blackPlayer?.isBot || activeRoom.id.includes('bot')) return;
+    const unsub = subscribeToGameRoom(activeRoom.id, (roomData) => {
+      if (roomData && roomData.lastMoveTimestamp && roomData.lastMoveTimestamp !== activeRoom.lastMoveTimestamp) {
+        setActiveRoom(roomData);
+        if (roomData.status === 'ended' && roomData.winner) {
+          const myColor = activeRoom.redPlayer?.id === currentUser?.id ? 'red' : 'black';
+          recordGameOutcome(myColor, roomData.winner);
+        }
+      }
+    });
+    return () => unsub();
+  }, [activeRoom?.id, activeRoom?.lastMoveTimestamp]);
 
   const sendWs = (type: string, payload: any) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -654,15 +685,57 @@ export default function App() {
       };
 
       setActiveRoom(customRoom);
-      showNotification('Game Table created! Waiting for a player to join...', 'info');
+      showNotification('Game Table created! Waiting for an opponent to join...', 'info');
+
+      // Save to Firestore so it appears in active game tables immediately for everyone
+      saveGameRoomToFirestore(customRoom).catch((e) => console.warn('saveGameRoomToFirestore error:', e));
+
+      // Subscribe to Firestore room updates so when someone joins, table transitions to playing
+      subscribeToGameRoom(customRoom.id, (roomData) => {
+        if (roomData) {
+          setActiveRoom(roomData);
+        }
+      });
 
       // Send to server if connected
-      sendWs('game:create_custom', { vsBot: false });
+      sendWs('game:create_custom', { vsBot: false, roomId: customRoom.id, name: customRoom.name });
     }
   };
 
-  const handleJoinGameRoom = (roomId: string) => {
+  const handleJoinGameRoom = async (roomId: string) => {
+    if (!currentUser) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
     sendWs('game:join', { roomId });
+
+    // Subscribe to this room
+    subscribeToGameRoom(roomId, (roomData) => {
+      if (roomData) {
+        setActiveRoom(roomData);
+      }
+    });
+
+    const roomToJoin = gameRooms.find((r) => r.id === roomId);
+    if (roomToJoin && roomToJoin.status === 'waiting' && !roomToJoin.blackPlayer) {
+      const updatedRoom: GameRoom = {
+        ...roomToJoin,
+        blackPlayer: {
+          id: currentUser.id,
+          username: currentUser.username,
+          avatarId: currentUser.avatarId,
+          rating: currentUser.rating || 1200,
+          color: 'black',
+        },
+        status: 'playing',
+        turnDeadline: Date.now() + (roomToJoin.turnTimeLimitSeconds || 45) * 1000,
+        lastMoveTimestamp: Date.now(),
+      };
+      setActiveRoom(updatedRoom);
+      await saveGameRoomToFirestore(updatedRoom);
+      showNotification(`Joined table: ${roomToJoin.name}! Match starting...`, 'info');
+    }
   };
 
   const handleSendMove = (move: MoveOption) => {
@@ -690,7 +763,8 @@ export default function App() {
       const over = checkGameOver(newBoard, nextTurn);
 
       if (over.isOver) {
-        recordGameOutcome('red', over.winner || 'draw');
+        const myColor = activeRoom.redPlayer?.id === currentUser?.id ? 'red' : 'black';
+        recordGameOutcome(myColor, over.winner || 'draw');
       }
 
       const updatedRoom: GameRoom = {
@@ -718,6 +792,7 @@ export default function App() {
       };
 
       setActiveRoom(updatedRoom);
+      saveGameRoomToFirestore(updatedRoom).catch((e) => console.warn(e));
 
       if (isBotGame && updatedRoom.status === 'playing' && nextTurn === 'black') {
         triggerBotMove(updatedRoom);
