@@ -73,30 +73,22 @@ function persistUsers() {
   }
 }
 
-// Username Validation Function: NO DIGITS ALLOWED!
+// Username Validation Function: Allows letters, numbers, spaces, hyphens, underscores
 function validateUsername(username: string): { valid: boolean; message?: string } {
   if (!username || typeof username !== 'string') {
     return { valid: false, message: 'Username is required.' };
   }
   const trimmed = username.trim();
-  if (trimmed.length < 2 || trimmed.length > 20) {
-    return { valid: false, message: 'Username must be between 2 and 20 characters.' };
+  if (trimmed.length < 2 || trimmed.length > 25) {
+    return { valid: false, message: 'Username must be between 2 and 25 characters.' };
   }
 
-  // Check for numbers/digits
-  if (/\d/.test(trimmed)) {
-    return {
-      valid: false,
-      message: 'Numbers/digits are strictly NOT allowed in usernames! Please use only letters.',
-    };
-  }
-
-  // Allowed characters: Letters, spaces, hyphens, underscores
-  const validCharsRegex = /^[a-zA-Z\s_-]+$/;
+  // Allowed characters: Letters, numbers, spaces, hyphens, underscores
+  const validCharsRegex = /^[a-zA-Z0-9\s_-]+$/;
   if (!validCharsRegex.test(trimmed)) {
     return {
       valid: false,
-      message: 'Usernames can only contain letters, spaces, hyphens, and underscores.',
+      message: 'Usernames can only contain letters, numbers, spaces, hyphens, and underscores.',
     };
   }
 
@@ -311,10 +303,23 @@ wss.on('connection', (ws: WebSocket) => {
         case 'challenge:send': {
           if (!currentUserId) return;
           const fromUser = usersMap.get(currentUserId);
-          const { targetUserId } = payload;
-          const toUser = usersMap.get(targetUserId);
+          const { targetUserId, targetUser } = payload;
+          let toUser = usersMap.get(targetUserId);
 
-          if (!fromUser || !toUser) return;
+          if (!toUser && targetUser) {
+            toUser = targetUser;
+            usersMap.set(targetUser.id, targetUser);
+          }
+
+          if (!fromUser || !toUser) {
+            ws.send(
+              JSON.stringify({
+                type: 'error',
+                payload: { message: 'Target player not available.' },
+              })
+            );
+            return;
+          }
           if (targetUserId === currentUserId) return;
 
           const challengeId = `ch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -328,13 +333,68 @@ wss.on('connection', (ws: WebSocket) => {
 
           activeChallenges.set(challengeId, challenge);
 
-          sendToUser(targetUserId, 'challenge:received', challenge);
-          ws.send(
-            JSON.stringify({
-              type: 'challenge:sent_ack',
-              payload: challenge,
-            })
-          );
+          const targetSocket = userSockets.get(targetUserId);
+          if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
+            // Real online player with active socket
+            sendToUser(targetUserId, 'challenge:received', challenge);
+            ws.send(
+              JSON.stringify({
+                type: 'challenge:sent_ack',
+                payload: challenge,
+              })
+            );
+          } else {
+            // Simulated/idle online user or practice account - auto-accept and start match!
+            ws.send(
+              JSON.stringify({
+                type: 'challenge:sent_ack',
+                payload: challenge,
+              })
+            );
+            setTimeout(() => {
+              if (activeChallenges.has(challengeId)) {
+                const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+                const initialBoard = createInitialBoard();
+                const redPlayer: GamePlayer = {
+                  id: fromUser.id,
+                  username: fromUser.username,
+                  avatarId: fromUser.avatarId,
+                  rating: fromUser.rating || 1200,
+                  color: 'red',
+                };
+                const blackPlayer: GamePlayer = {
+                  id: toUser.id,
+                  username: toUser.username,
+                  avatarId: toUser.avatarId,
+                  rating: toUser.rating || 1200,
+                  color: 'black',
+                  isBot: true,
+                };
+                const room: GameRoom = {
+                  id: roomId,
+                  name: `${redPlayer.username} vs ${blackPlayer.username}`,
+                  status: 'playing',
+                  redPlayer,
+                  blackPlayer,
+                  currentTurn: 'red',
+                  board: initialBoard,
+                  history: [],
+                  capturedRed: 0,
+                  capturedBlack: 0,
+                  winner: null,
+                  createdAt: Date.now(),
+                  lastMoveTimestamp: Date.now(),
+                  turnTimeLimitSeconds: 45,
+                  turnDeadline: Date.now() + 45000,
+                  spectatorsCount: 0,
+                };
+                activeRooms.set(roomId, room);
+                activeChallenges.delete(challengeId);
+                broadcast('lobby:rooms', Array.from(activeRooms.values()));
+                sendToUser(fromUser.id, 'game:started', room);
+              }
+            }, 600);
+          }
           break;
         }
 

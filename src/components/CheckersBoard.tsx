@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckersPiece, MoveOption, PieceColor, Position } from '../types';
-import { Crown, Sparkles, Box, Maximize2 } from 'lucide-react';
+import { Crown, Sparkles } from 'lucide-react';
 import { sounds } from '../lib/sound';
 
 export type BoardTheme = 'wood' | 'crimson' | 'neon' | 'emerald' | 'slate';
@@ -92,8 +92,6 @@ interface CheckersBoardProps {
   onExecuteMove: (move: MoveOption) => void;
   lastMove: { from: Position; to: Position } | null;
   theme?: BoardTheme;
-  is3DTilted?: boolean;
-  onToggle3DTilt?: () => void;
 }
 
 export const CheckersBoard: React.FC<CheckersBoardProps> = ({
@@ -106,8 +104,6 @@ export const CheckersBoard: React.FC<CheckersBoardProps> = ({
   onExecuteMove,
   lastMove,
   theme,
-  is3DTilted = true,
-  onToggle3DTilt,
 }) => {
   const [internalTheme, setInternalTheme] = useState<BoardTheme>(() => {
     return (localStorage.getItem('checkers_board_theme') as BoardTheme) || 'wood';
@@ -174,196 +170,167 @@ export const CheckersBoard: React.FC<CheckersBoardProps> = ({
   };
 
   return (
-    <div className="relative flex flex-col items-center justify-center w-full max-h-full py-1">
-      {/* 3D Perspective Stage Container */}
+    <div className="relative flex items-center justify-center select-none w-full h-full max-h-full p-1 sm:p-2">
+      {/* Board Outer Wooden / Theme Frame */}
       <div
-        className="w-full flex items-center justify-center transition-all duration-500"
+        className="w-[min(94vw,65vh,520px)] h-[min(94vw,65vh,520px)] aspect-square p-2.5 sm:p-3.5 rounded-2xl sm:rounded-3xl border-2 sm:border-4 shadow-2xl flex flex-col justify-between"
         style={{
-          perspective: is3DTilted ? '1000px' : 'none',
-          perspectiveOrigin: '50% 50%',
+          backgroundColor: template.frameHex,
+          borderColor: template.borderHex,
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.85), inset 0 2px 4px rgba(255, 255, 255, 0.1)',
         }}
       >
-        {/* Main Board Card */}
-        <div
-          className="w-[min(90vw,80vw,50vh,460px)] h-[min(90vw,80vw,50vh,460px)] aspect-square p-2 sm:p-3 rounded-2xl sm:rounded-3xl border-2 sm:border-4 select-none transition-all duration-500 flex flex-col justify-between"
-          style={{
-            backgroundColor: template.frameHex,
-            borderColor: template.borderHex,
-            transform: is3DTilted ? 'rotateX(22deg) scale(0.96)' : 'none',
-            transformStyle: 'preserve-3d',
-            boxShadow: is3DTilted
-              ? '0 30px 60px -15px rgba(0, 0, 0, 0.95), 0 10px 25px -5px rgba(0, 0, 0, 0.8), inset 0 2px 4px rgba(255, 255, 255, 0.12)'
-              : '0 20px 40px -10px rgba(0, 0, 0, 0.8), inset 0 2px 4px rgba(255, 255, 255, 0.1)',
-          }}
-        >
-          {/* 8x8 Board Grid */}
-          <div className="w-full h-full grid grid-cols-8 grid-rows-8 rounded-xl sm:rounded-2xl overflow-hidden border border-black/40 relative shadow-inner">
-            {Array.from({ length: 8 }).map((_, displayR) => {
-              const r = isFlipped ? 7 - displayR : displayR;
+        {/* 8x8 Board Grid */}
+        <div className="w-full h-full grid grid-cols-8 grid-rows-8 rounded-xl sm:rounded-2xl overflow-hidden border border-black/50 relative shadow-inner">
+          {Array.from({ length: 8 }).map((_, displayR) => {
+            const r = isFlipped ? 7 - displayR : displayR;
 
-              return Array.from({ length: 8 }).map((_, displayC) => {
-                const c = isFlipped ? 7 - displayC : displayC;
-                const isDarkSquare = (r + c) % 2 === 1;
-                const piece = board[r][c];
+            return Array.from({ length: 8 }).map((_, displayC) => {
+              const c = isFlipped ? 7 - displayC : displayC;
+              const isDarkSquare = (r + c) % 2 === 1;
+              const piece = board[r][c];
 
-                const isSelected =
-                  selectedPiecePos?.row === r && selectedPiecePos?.col === c;
+              const isSelected =
+                selectedPiecePos?.row === r && selectedPiecePos?.col === c;
 
-                const moveOption = selectedMoves.find(
-                  (m) => m.to.row === r && m.to.col === c
-                );
-                const isTargetSquare = !!moveOption;
+              const moveOption = selectedMoves.find(
+                (m) => m.to.row === r && m.to.col === c
+              );
+              const isTargetSquare = !!moveOption;
 
-                const isCapturedSquare = selectedMoves.some((m) =>
-                  m.captures.some((cap) => cap.row === r && cap.col === c)
+              const isCapturedSquare = selectedMoves.some((m) =>
+                m.captures.some((cap) => cap.row === r && cap.col === c)
+              );
+
+              const hasAvailableMoves =
+                piece &&
+                piece.color === currentTurn &&
+                validMoveOptions.some(
+                  (m) => m.from.row === r && m.from.col === c
                 );
 
-                const hasAvailableMoves =
-                  piece &&
-                  piece.color === currentTurn &&
-                  validMoveOptions.some(
-                    (m) => m.from.row === r && m.from.col === c
-                  );
+              const isLastMove = isLastMoveSquare(r, c);
 
-                const isLastMove = isLastMoveSquare(r, c);
-
-                return (
-                  <div
-                    key={`${r}-${c}`}
-                    onClick={() => handleSquareClick(r, c)}
-                    className="relative w-full h-full flex items-center justify-center transition-colors duration-150 cursor-pointer"
-                    style={{
-                      backgroundColor: isDarkSquare
-                        ? isSelected
-                          ? `${template.selectedGlow}dd`
-                          : isTargetSquare
-                          ? `${template.targetHex}88`
-                          : isLastMove
-                          ? 'rgba(245, 158, 11, 0.25)'
-                          : template.darkHex
-                        : template.lightHex,
-                      boxShadow: isSelected
-                        ? `inset 0 0 12px ${template.selectedGlow}, 0 0 15px ${template.selectedGlow}`
+              return (
+                <div
+                  key={`${r}-${c}`}
+                  onClick={() => handleSquareClick(r, c)}
+                  className="relative w-full h-full flex items-center justify-center transition-colors duration-150 cursor-pointer"
+                  style={{
+                    backgroundColor: isDarkSquare
+                      ? isSelected
+                        ? `${template.selectedGlow}dd`
                         : isTargetSquare
-                        ? `inset 0 0 10px ${template.targetHex}`
-                        : undefined,
-                    }}
-                  >
-                    {/* Square Notation Labels (Letters at bottom, Numbers at left) */}
-                    {displayR === 7 && (
-                      <span
-                        className="absolute bottom-0.5 right-1 text-[7px] sm:text-[8px] font-black pointer-events-none"
-                        style={{
-                          color: isDarkSquare ? template.labelDark : template.labelLight,
-                        }}
-                      >
-                        {String.fromCharCode(65 + c)}
-                      </span>
-                    )}
-                    {displayC === 0 && (
-                      <span
-                        className="absolute top-0.5 left-1 text-[7px] sm:text-[8px] font-black pointer-events-none"
-                        style={{
-                          color: isDarkSquare ? template.labelDark : template.labelLight,
-                        }}
-                      >
-                        {8 - r}
-                      </span>
-                    )}
+                        ? `${template.targetHex}88`
+                        : isLastMove
+                        ? 'rgba(245, 158, 11, 0.28)'
+                        : template.darkHex
+                      : template.lightHex,
+                    boxShadow: isSelected
+                      ? `inset 0 0 12px ${template.selectedGlow}, 0 0 15px ${template.selectedGlow}`
+                      : isTargetSquare
+                      ? `inset 0 0 10px ${template.targetHex}`
+                      : undefined,
+                  }}
+                >
+                  {/* Square Notation Labels (Letters at bottom, Numbers at left) */}
+                  {displayR === 7 && (
+                    <span
+                      className="absolute bottom-0.5 right-1 text-[8px] sm:text-[9px] font-black pointer-events-none"
+                      style={{
+                        color: isDarkSquare ? template.labelDark : template.labelLight,
+                      }}
+                    >
+                      {String.fromCharCode(65 + c)}
+                    </span>
+                  )}
+                  {displayC === 0 && (
+                    <span
+                      className="absolute top-0.5 left-1 text-[8px] sm:text-[9px] font-black pointer-events-none"
+                      style={{
+                        color: isDarkSquare ? template.labelDark : template.labelLight,
+                      }}
+                    >
+                      {8 - r}
+                    </span>
+                  )}
 
-                    {/* Captured Piece Target Outline Indicator */}
-                    {isCapturedSquare && (
-                      <div className="absolute inset-1 rounded-full border-2 border-dashed border-rose-500 animate-pulse pointer-events-none z-20" />
-                    )}
+                  {/* Captured Piece Target Outline Indicator */}
+                  {isCapturedSquare && (
+                    <div className="absolute inset-1 rounded-full border-2 border-dashed border-rose-500 animate-pulse pointer-events-none z-20" />
+                  )}
 
-                    {/* Target Move Landing Dot */}
-                    {isTargetSquare && !piece && (
+                  {/* Target Move Landing Ring & Dot */}
+                  {isTargetSquare && !piece && (
+                    <motion.div
+                      initial={{ scale: 0.5 }}
+                      animate={{ scale: [0.8, 1.1, 0.8] }}
+                      transition={{ repeat: Infinity, duration: 1.5 }}
+                      className="w-4 h-4 sm:w-6 sm:h-6 rounded-full border-2 border-white shadow-lg pointer-events-none z-10"
+                      style={{
+                        backgroundColor: template.targetHex,
+                        boxShadow: `0 0 10px ${template.targetHex}`,
+                      }}
+                    />
+                  )}
+
+                  {/* Checkers Piece */}
+                  <AnimatePresence mode="popLayout">
+                    {piece && (
                       <motion.div
-                        initial={{ scale: 0.5 }}
-                        animate={{ scale: [0.8, 1.1, 0.8] }}
-                        transition={{ repeat: Infinity, duration: 1.5 }}
-                        className="w-3.5 h-3.5 sm:w-6 sm:h-6 rounded-full border-2 border-white shadow-lg pointer-events-none z-10"
+                        key={piece.id}
+                        initial={{ scale: 0.6, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        exit={{ scale: 0.2, opacity: 0 }}
+                        transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                        className={`relative w-[84%] h-[84%] rounded-full flex items-center justify-center cursor-pointer shadow-xl transition-transform ${
+                          isSelected
+                            ? 'scale-110 z-20 ring-4 ring-amber-400'
+                            : hasAvailableMoves && (playerColor === 'spectator' || piece.color === playerColor)
+                            ? 'ring-2 ring-amber-400/90 hover:scale-105'
+                            : 'hover:scale-105'
+                        } ${
+                          piece.color === 'red'
+                            ? 'bg-gradient-to-tr from-rose-900 via-red-600 to-rose-400 border-2 border-rose-300 shadow-rose-950/80'
+                            : 'bg-gradient-to-tr from-slate-950 via-zinc-900 to-slate-750 border-2 border-slate-400 shadow-black/90'
+                        }`}
                         style={{
-                          backgroundColor: template.targetHex,
-                          boxShadow: `0 0 10px ${template.targetHex}`,
+                          filter: 'drop-shadow(0 3px 4px rgba(0,0,0,0.6))',
                         }}
-                      />
-                    )}
-
-                    {/* Checkers Piece */}
-                    <AnimatePresence mode="popLayout">
-                      {piece && (
-                        <motion.div
-                          key={piece.id}
-                          initial={{ scale: 0.6, opacity: 0 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          exit={{ scale: 0.2, opacity: 0 }}
-                          transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-                          className={`relative w-[82%] h-[82%] rounded-full flex items-center justify-center cursor-pointer shadow-2xl transition-transform ${
-                            isSelected
-                              ? 'scale-110 z-20 ring-4 ring-amber-400'
-                              : hasAvailableMoves && (playerColor === 'spectator' || piece.color === playerColor)
-                              ? 'ring-2 ring-amber-400/90 hover:scale-105'
-                              : 'hover:scale-105'
-                          } ${
+                      >
+                        {/* Inner Circular Piece Groove */}
+                        <div
+                          className={`w-[74%] h-[74%] rounded-full border-2 flex items-center justify-center shadow-inner ${
                             piece.color === 'red'
-                              ? 'bg-gradient-to-tr from-rose-900 via-red-600 to-rose-400 border-2 border-rose-300 shadow-rose-950/80'
-                              : 'bg-gradient-to-tr from-slate-950 via-zinc-900 to-slate-750 border-2 border-slate-400 shadow-black/90'
+                              ? 'border-amber-300/70 bg-red-700/50'
+                              : 'border-slate-400/50 bg-zinc-800/50'
                           }`}
-                          style={{
-                            filter: is3DTilted
-                              ? 'drop-shadow(0 6px 4px rgba(0,0,0,0.65))'
-                              : 'drop-shadow(0 2px 3px rgba(0,0,0,0.5))',
-                          }}
                         >
-                          {/* Inner Circular Piece Groove */}
-                          <div
-                            className={`w-[74%] h-[74%] rounded-full border-2 flex items-center justify-center shadow-inner ${
-                              piece.color === 'red'
-                                ? 'border-amber-300/70 bg-red-700/50'
-                                : 'border-slate-400/50 bg-zinc-800/50'
-                            }`}
-                          >
-                            {/* Crown for King Piece */}
-                            {piece.type === 'king' && (
-                              <motion.div
-                                initial={{ scale: 0, rotate: -30 }}
-                                animate={{ scale: 1, rotate: 0 }}
-                                className="flex items-center justify-center"
-                              >
-                                <Crown
-                                  className={`w-4 h-4 sm:w-6 sm:h-6 drop-shadow-lg ${
-                                    piece.color === 'red'
-                                      ? 'text-amber-300'
-                                      : 'text-amber-400'
-                                  }`}
-                                />
-                              </motion.div>
-                            )}
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                );
-              });
-            })}
-          </div>
+                          {/* Crown for King Piece */}
+                          {piece.type === 'king' && (
+                            <motion.div
+                              initial={{ scale: 0, rotate: -30 }}
+                              animate={{ scale: 1, rotate: 0 }}
+                              className="flex items-center justify-center"
+                            >
+                              <Crown
+                                className={`w-4 h-4 sm:w-6 sm:h-6 drop-shadow-lg ${
+                                  piece.color === 'red'
+                                    ? 'text-amber-300'
+                                    : 'text-amber-400'
+                                }`}
+                              />
+                            </motion.div>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              );
+            });
+          })}
         </div>
-      </div>
-
-      {/* Tilted Tabletop Status Bar & Switcher */}
-      <div className="mt-2 flex items-center justify-center gap-2">
-        {onToggle3DTilt && (
-          <button
-            onClick={onToggle3DTilt}
-            className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 text-[11px] font-bold text-slate-300 hover:text-amber-400 transition shadow active:scale-95"
-            title="Toggle 3D Tabletop Tilted Angle vs 2D Flat View"
-          >
-            <Box className="w-3.5 h-3.5 text-amber-400" />
-            <span>Format: {is3DTilted ? '📐 3D Tilted Tabletop' : 'Flat 2D View'}</span>
-          </button>
-        )}
       </div>
     </div>
   );

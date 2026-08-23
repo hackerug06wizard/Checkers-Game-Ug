@@ -16,7 +16,8 @@ import {
   ChevronRight,
   User,
   X,
-  Smartphone,
+  UserCheck,
+  Gamepad2,
 } from 'lucide-react';
 
 interface BottomAuthSheetProps {
@@ -24,6 +25,7 @@ interface BottomAuthSheetProps {
   onClose: () => void;
   onLoginSuccess: (user: UserProfile) => void;
   defaultEmail?: string;
+  allowDismiss?: boolean;
 }
 
 export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
@@ -31,6 +33,7 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
   onClose,
   onLoginSuccess,
   defaultEmail = 'hackerug06@gmail.com',
+  allowDismiss = false,
 }) => {
   const [step, setStep] = useState<'select_email' | 'phone_number'>('select_email');
   const [selectedEmail, setSelectedEmail] = useState(defaultEmail);
@@ -41,11 +44,13 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
   const [countryCode, setCountryCode] = useState('+256');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tempUid, setTempUid] = useState<string>(() => `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
+  const [tempUid, setTempUid] = useState<string>(
+    () => `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+  );
 
   if (!isOpen) return null;
 
-  // Device Google Accounts list for 1-Tap selection
+  // Real user device Google Account
   const deviceAccounts = [
     {
       email: defaultEmail,
@@ -53,15 +58,52 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
       avatarChar: defaultEmail.charAt(0).toUpperCase(),
       color: 'bg-emerald-600',
     },
-    {
-      email: 'checkers.player@gmail.com',
-      name: 'Checkers Master',
-      avatarChar: 'C',
-      color: 'bg-amber-600',
-    },
   ];
 
-  // 1. Select Google Account
+  // 1. Play as Guest Action
+  const handlePlayAsGuest = async () => {
+    setError(null);
+    setLoading(true);
+    sounds.playMove();
+
+    try {
+      const randomSuffix = Math.floor(100 + Math.random() * 900);
+      const guestNames = ['CheckersAce', 'KingMaster', 'BoardKnight', 'Grandmaster', 'SwiftJumper'];
+      const pickedName = `${guestNames[Math.floor(Math.random() * guestNames.length)]}${randomSuffix}`;
+      const guestUid = `guest_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+      const guestProfile: UserProfile = {
+        id: guestUid,
+        username: pickedName,
+        realName: 'Guest Player',
+        avatarId: 'avatar-crown',
+        termsAccepted: true,
+        rating: 1200,
+        elo: 1200,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        gamesPlayed: 0,
+        status: 'online',
+        isOnline: true,
+        createdAt: Date.now(),
+        lastActiveTimestamp: Date.now(),
+      };
+
+      await saveUserProfileToFirestore(guestProfile);
+      localStorage.setItem('checkers_user_profile', JSON.stringify(guestProfile));
+      sounds.playKing();
+      onLoginSuccess(guestProfile);
+      onClose();
+    } catch (err: any) {
+      console.error('Guest login error:', err);
+      setError('Could not initialize guest session. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 2. Select Google Account on Device
   const handleSelectAccount = async (email: string, displayName: string) => {
     setError(null);
     setLoading(true);
@@ -69,7 +111,7 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
 
     try {
       setSelectedEmail(email);
-      const cleanName = displayName.replace(/[^a-zA-Z0-9]/g, '') || 'CheckersPlayer';
+      const cleanName = displayName.replace(/[^a-zA-Z0-9]/g, '') || 'Player';
       setSelectedName(cleanName);
 
       // Check if user profile already exists in Firestore for this email/uid
@@ -78,11 +120,11 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
 
       const existing = await getUserProfileFromFirestore(generatedUid);
       if (existing && existing.phoneNumber) {
-        // Already registered with phone number
         existing.isOnline = true;
         existing.lastActiveTimestamp = Date.now();
         await saveUserProfileToFirestore(existing);
         localStorage.setItem('checkers_user_profile', JSON.stringify(existing));
+        sounds.playKing();
         onLoginSuccess(existing);
         onClose();
         return;
@@ -92,14 +134,13 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
       setStep('phone_number');
     } catch (err: any) {
       console.warn('Account select error:', err);
-      // Still proceed to phone entry
       setStep('phone_number');
     } finally {
       setLoading(false);
     }
   };
 
-  // 2. Real Google OAuth Popup
+  // 3. Real Google OAuth Popup
   const handleGoogleOAuthPopup = async () => {
     setError(null);
     setLoading(true);
@@ -108,6 +149,7 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
     try {
       const userProfile = await signInWithGoogle(true);
       if (userProfile.phoneNumber) {
+        sounds.playKing();
         onLoginSuccess(userProfile);
         onClose();
       } else {
@@ -118,14 +160,13 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
       }
     } catch (err: any) {
       console.warn('Google popup err:', err);
-      // Fallback to fast device select
       setStep('phone_number');
     } finally {
       setLoading(false);
     }
   };
 
-  // 3. Complete Phone Number Registration
+  // 4. Complete Phone Number Registration
   const handleCompletePhoneRegistration = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phoneNumber.trim() || phoneNumber.trim().length < 6) {
@@ -141,7 +182,6 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
       const fullPhone = `${countryCode} ${phoneNumber.trim()}`;
       const uid = tempUid || `user_${Date.now()}`;
 
-      // Check if profile exists
       let profile: UserProfile | null = await getUserProfileFromFirestore(uid);
 
       if (!profile) {
@@ -183,56 +223,69 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in select-none">
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in select-none"
+      onClick={(e) => {
+        // Prevent accidental closing if clicking background unless allowDismiss is true
+        if (e.target === e.currentTarget && allowDismiss) {
+          onClose();
+        }
+      }}
+    >
       {/* Bottom Sheet Modal Container */}
-      <div className="bg-slate-900 border-t sm:border border-slate-800 rounded-t-3xl sm:rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[92vh] animate-slide-up">
+      <div
+        className="bg-slate-900 border-t sm:border border-slate-800 rounded-t-3xl sm:rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[92vh] animate-slide-up"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Drag handle pill on mobile */}
         <div className="w-12 h-1.5 bg-slate-700 rounded-full mx-auto mt-3 mb-1 sm:hidden" />
 
         {/* Top Header */}
-        <div className="px-6 py-4 border-b border-slate-800/80 flex items-center justify-between bg-slate-950/40">
+        <div className="px-6 py-4 border-b border-slate-800/80 flex items-center justify-between bg-slate-950/50">
           <div className="flex items-center gap-3">
             <AppLogo size="sm" />
             <div>
               <h2 className="text-base font-black text-white tracking-tight">
-                {step === 'select_email' ? 'Sign in with Google' : 'Add Phone Number'}
+                {step === 'select_email' ? 'Sign In to Checkers Arena' : 'Add Phone Number'}
               </h2>
               <p className="text-[11px] text-amber-400 font-semibold">
-                {step === 'select_email' ? 'Choose account to continue' : 'Security & player identity'}
+                {step === 'select_email' ? 'Choose Google account or Play as Guest' : 'Security & player identity'}
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {allowDismiss && (
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Sheet Content */}
-        <div className="p-6 overflow-y-auto custom-scrollbar space-y-5">
+        <div className="p-6 overflow-y-auto custom-scrollbar space-y-4">
           {error && (
             <div className="p-3 rounded-2xl bg-rose-950/60 border border-rose-800 text-xs text-rose-300 font-medium">
               {error}
             </div>
           )}
 
-          {/* STEP 1: Select Email / Google Account */}
+          {/* STEP 1: Select Email / Google Account OR Play as Guest */}
           {step === 'select_email' && (
-            <div className="space-y-4">
+            <div className="space-y-3.5">
               <div className="text-xs text-slate-300 font-medium leading-relaxed">
-                Select a Google Account on this device to sign in to Checkers Arena:
+                Choose your Google Account to sync rating and stats, or jump in as a Guest:
               </div>
 
-              {/* Device Accounts List */}
+              {/* Real Device Account List */}
               <div className="space-y-2">
                 {deviceAccounts.map((acc, idx) => (
                   <button
                     key={idx}
                     onClick={() => handleSelectAccount(acc.email, acc.name)}
                     disabled={loading}
-                    className="w-full p-3.5 rounded-2xl bg-slate-950/80 hover:bg-slate-950 border border-slate-800 hover:border-amber-500/60 flex items-center justify-between transition group active:scale-98 shadow-sm"
+                    className="w-full p-3.5 rounded-2xl bg-slate-950/90 hover:bg-slate-950 border border-slate-800 hover:border-amber-500/70 flex items-center justify-between transition group active:scale-98 shadow-sm"
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <div
@@ -252,18 +305,11 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
                 ))}
               </div>
 
-              {/* Divider */}
-              <div className="flex items-center gap-3 my-2 text-slate-600 text-xs">
-                <div className="flex-1 h-px bg-slate-800" />
-                <span>or</span>
-                <div className="flex-1 h-px bg-slate-800" />
-              </div>
-
               {/* Real Google Account Popup Button */}
               <button
                 onClick={handleGoogleOAuthPopup}
                 disabled={loading}
-                className="w-full py-3.5 px-4 rounded-2xl bg-white hover:bg-slate-100 text-slate-900 font-black text-xs sm:text-sm flex items-center justify-center gap-3 transition active:scale-98 shadow-md"
+                className="w-full py-3 px-4 rounded-2xl bg-white hover:bg-slate-100 text-slate-900 font-black text-xs flex items-center justify-center gap-2.5 transition active:scale-98 shadow-md"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24">
                   <path
@@ -283,7 +329,24 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
                     d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                   />
                 </svg>
-                <span>{loading ? 'Connecting...' : 'Use Another Google Account'}</span>
+                <span>{loading ? 'Connecting...' : 'Sign In with Google Account'}</span>
+              </button>
+
+              {/* Divider */}
+              <div className="flex items-center gap-3 my-1.5 text-slate-600 text-xs">
+                <div className="flex-1 h-px bg-slate-800" />
+                <span className="text-[11px] font-bold text-slate-500">OR QUICK START</span>
+                <div className="flex-1 h-px bg-slate-800" />
+              </div>
+
+              {/* PLAY AS GUEST BUTTON */}
+              <button
+                onClick={handlePlayAsGuest}
+                disabled={loading}
+                className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-slate-800 via-slate-750 to-slate-800 hover:from-amber-600/30 hover:to-amber-500/20 border border-slate-700 hover:border-amber-400 text-amber-300 hover:text-amber-200 font-black text-xs sm:text-sm flex items-center justify-center gap-2.5 transition active:scale-98 shadow-md"
+              >
+                <Gamepad2 className="w-4 h-4 text-amber-400" />
+                <span>Play Instantly as Guest</span>
               </button>
             </div>
           )}
@@ -353,6 +416,16 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
                 >
                   <span>{loading ? 'Adding Account...' : 'Finish & Enter Arena'}</span>
                   <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="pt-1 text-center">
+                <button
+                  type="button"
+                  onClick={handlePlayAsGuest}
+                  className="text-xs text-slate-400 hover:text-amber-400 underline transition"
+                >
+                  Or skip and play as guest
                 </button>
               </div>
             </form>

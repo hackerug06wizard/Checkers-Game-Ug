@@ -327,8 +327,12 @@ export default function App() {
   };
 
   const handleSendChallenge = (targetUserId: string) => {
-    sendWs('challenge:send', { targetUserId });
-    showNotification('Challenge sent! Waiting for player to respond...');
+    const targetUser = onlineUsers.find((u) => u.id === targetUserId);
+    sounds.playChallenge();
+    sendWs('challenge:send', { targetUserId, targetUser });
+    showNotification(
+      `Challenge sent to ${targetUser?.username || 'player'}! Waiting for response...`
+    );
   };
 
   const handleRespondChallenge = (accept: boolean) => {
