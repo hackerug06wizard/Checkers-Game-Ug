@@ -321,7 +321,7 @@ wss.on('connection', (ws: WebSocket) => {
         case 'challenge:send': {
           if (!currentUserId) return;
           const fromUser = usersMap.get(currentUserId);
-          const { targetUserId, targetUser } = payload;
+          const { targetUserId, targetUser, challengeId: customChallengeId } = payload;
           let toUser = usersMap.get(targetUserId);
 
           if (!toUser && targetUser) {
@@ -346,7 +346,7 @@ wss.on('connection', (ws: WebSocket) => {
           }
           if (targetUserId === currentUserId || toUser.id === fromUser.id) return;
 
-          const challengeId = `ch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          const challengeId = customChallengeId || `ch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           const challenge: Challenge = {
             id: challengeId,
             fromUser,
@@ -440,10 +440,23 @@ wss.on('connection', (ws: WebSocket) => {
 
         case 'challenge:respond': {
           if (!currentUserId) return;
-          const { challengeId, accept } = payload;
-          const challenge = activeChallenges.get(challengeId);
+          const { challengeId, accept, roomId: customRoomId, fromUser: fallbackFromUser, toUser: fallbackToUser } = payload;
+          let challenge = activeChallenges.get(challengeId);
 
-          if (!challenge) return;
+          if (!challenge && fallbackFromUser && fallbackToUser) {
+            challenge = {
+              id: challengeId,
+              fromUser: fallbackFromUser,
+              toUser: fallbackToUser,
+              createdAt: Date.now(),
+              status: 'pending',
+            };
+          }
+
+          if (!challenge) {
+            console.warn(`Challenge ${challengeId} not found in activeChallenges`);
+            return;
+          }
 
           if (!accept) {
             challenge.status = 'declined';
@@ -458,7 +471,7 @@ wss.on('connection', (ws: WebSocket) => {
           challenge.status = 'accepted';
 
           // Create Game Room for both players
-          const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          const roomId = customRoomId || `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           const initialBoard = createInitialBoard();
 
           // Randomize Red vs Black
@@ -473,8 +486,8 @@ wss.on('connection', (ws: WebSocket) => {
               ? challenge.fromUser.avatarId
               : challenge.toUser.avatarId,
             rating: isFromRed
-              ? challenge.fromUser.rating
-              : challenge.toUser.rating,
+              ? challenge.fromUser.rating || 1200
+              : challenge.toUser.rating || 1200,
             color: 'red',
           };
 
@@ -487,8 +500,8 @@ wss.on('connection', (ws: WebSocket) => {
               ? challenge.toUser.avatarId
               : challenge.fromUser.avatarId,
             rating: isFromRed
-              ? challenge.toUser.rating
-              : challenge.fromUser.rating,
+              ? challenge.toUser.rating || 1200
+              : challenge.fromUser.rating || 1200,
             color: 'black',
           };
 

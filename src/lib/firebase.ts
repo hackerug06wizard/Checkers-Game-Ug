@@ -348,8 +348,12 @@ export async function updatePresenceHeartbeat(userId: string): Promise<void> {
 // REAL-TIME FIRESTORE CHALLENGE SYSTEM
 // ==========================================
 
-export async function sendChallengeToFirestore(fromUser: UserProfile, toUser: UserProfile): Promise<string> {
-  const challengeId = `ch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+export async function sendChallengeToFirestore(
+  fromUser: UserProfile,
+  toUser: UserProfile,
+  customChallengeId?: string
+): Promise<string> {
+  const challengeId = customChallengeId || `ch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
   const challengeDoc = doc(db, 'challenges', challengeId);
   const challengeData = {
     id: challengeId,
@@ -370,15 +374,17 @@ export function subscribeToIncomingChallenges(userId: string, callback: (challen
       collection(db, 'challenges'),
       where('targetUserId', '==', userId),
       where('status', '==', 'pending'),
-      limit(1)
+      limit(5)
     );
     return onSnapshot(q, (snapshot) => {
       if (!snapshot.empty) {
-        const data = snapshot.docs[0].data() as Challenge;
-        // Ignore stale challenges older than 90 seconds
-        if (Date.now() - data.createdAt < 90000) {
-          callback(data);
-          return;
+        // Find most recent valid pending challenge
+        for (const docSnap of snapshot.docs) {
+          const data = docSnap.data() as Challenge;
+          if (Date.now() - (data.createdAt || 0) < 120000 && data.status === 'pending') {
+            callback(data);
+            return;
+          }
         }
       }
       callback(null);
@@ -407,8 +413,9 @@ export async function respondToChallengeInFirestore(
   challengeId: string,
   accept: boolean,
   fromUser: UserProfile,
-  toUser: UserProfile
-): Promise<string | null> {
+  toUser: UserProfile,
+  existingRoomId?: string
+): Promise<{ roomId: string; room: GameRoom } | null> {
   try {
     const challengeRef = doc(db, 'challenges', challengeId);
     if (!accept) {
@@ -416,7 +423,7 @@ export async function respondToChallengeInFirestore(
       return null;
     }
 
-    const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const roomId = existingRoomId || `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const isFromRed = Math.random() < 0.5;
 
     const redPlayer: GamePlayer = {
@@ -455,8 +462,8 @@ export async function respondToChallengeInFirestore(
     };
 
     await saveGameRoomToFirestore(newRoom);
-    await updateDoc(challengeRef, { status: 'accepted', roomId });
-    return roomId;
+    await setDoc(challengeRef, { status: 'accepted', roomId, room: newRoom }, { merge: true });
+    return { roomId, room: newRoom };
   } catch (e) {
     console.error('respondToChallengeInFirestore error:', e);
     return null;

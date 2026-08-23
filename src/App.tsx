@@ -425,18 +425,29 @@ export default function App() {
 
   const handleSendChallenge = async (targetUserId: string) => {
     const targetUser = onlineUsers.find((u) => u.id === targetUserId);
+    const challengeId = `ch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     sounds.playChallenge();
-    sendWs('challenge:send', { targetUserId, targetUser });
+    sendWs('challenge:send', { targetUserId, targetUser, challengeId });
     if (currentUser && targetUser) {
       try {
-        const cId = await sendChallengeToFirestore(currentUser, targetUser);
+        const cId = await sendChallengeToFirestore(currentUser, targetUser, challengeId);
         if (cId) {
           const unsub = subscribeToChallengeDoc(cId, (snapData) => {
-            if (snapData?.status === 'accepted' && snapData.roomId) {
+            if (snapData?.status === 'accepted') {
               unsub();
-              subscribeToGameRoom(snapData.roomId, (roomData) => {
-                if (roomData) setActiveRoom(roomData);
-              });
+              if (snapData.room) {
+                setActiveRoom(snapData.room);
+              }
+              if (snapData.roomId) {
+                subscribeToGameRoom(snapData.roomId, (roomData) => {
+                  if (roomData) setActiveRoom(roomData);
+                });
+              }
+              showNotification(
+                `⚔️ Match accepted! Starting game vs ${targetUser.username}...`,
+                'info',
+                6000
+              );
             } else if (snapData?.status === 'declined') {
               unsub();
               showNotification(
@@ -460,20 +471,31 @@ export default function App() {
 
   const handleRespondChallenge = async (accept: boolean) => {
     if (!incomingChallenge) return;
+    const challenge = incomingChallenge;
+    setIncomingChallenge(null);
+
+    const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
     sendWs('challenge:respond', {
-      challengeId: incomingChallenge.id,
+      challengeId: challenge.id,
       accept,
+      roomId,
+      fromUser: challenge.fromUser,
+      toUser: currentUser || challenge.toUser,
     });
-    if (currentUser && incomingChallenge.fromUser) {
+
+    if (currentUser && challenge.fromUser && accept) {
       try {
-        const roomId = await respondToChallengeInFirestore(
-          incomingChallenge.id,
+        const res = await respondToChallengeInFirestore(
+          challenge.id,
           accept,
-          incomingChallenge.fromUser,
-          currentUser
+          challenge.fromUser,
+          currentUser,
+          roomId
         );
-        if (roomId && accept) {
-          subscribeToGameRoom(roomId, (roomData) => {
+        if (res && res.room) {
+          setActiveRoom(res.room);
+          subscribeToGameRoom(res.roomId, (roomData) => {
             if (roomData) setActiveRoom(roomData);
           });
         }
@@ -481,10 +503,10 @@ export default function App() {
         console.warn('respondToChallengeInFirestore error:', err);
       }
     }
+
     if (!accept) {
       showNotification('Challenge declined.', 'info', 5000);
     }
-    setIncomingChallenge(null);
   };
 
   const recordGameOutcome = (userColor: 'red' | 'black', winnerColor: string | null) => {
@@ -685,6 +707,7 @@ export default function App() {
       };
 
       setActiveRoom(customRoom);
+      setGameRooms((prev) => [customRoom, ...prev.filter((r) => r.id !== customRoom.id)]);
       showNotification('Game Table created! Waiting for an opponent to join...', 'info');
 
       // Save to Firestore so it appears in active game tables immediately for everyone
