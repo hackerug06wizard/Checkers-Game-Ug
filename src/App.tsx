@@ -26,6 +26,11 @@ import {
   getUserProfileFromFirestore,
   deleteUserAccount,
   logOutUser,
+  sendChallengeToFirestore,
+  subscribeToIncomingChallenges,
+  respondToChallengeInFirestore,
+  subscribeToChallengeDoc,
+  subscribeToGameRoom,
 } from './lib/firebase';
 import {
   createInitialBoard,
@@ -56,9 +61,57 @@ export default function App() {
   const [boardTheme, setBoardTheme] = useState<BoardTheme>(() => {
     return (localStorage.getItem('checkers_board_theme') as BoardTheme) || 'wood';
   });
-  const [notification, setNotification] = useState<{ message: string; type?: 'info' | 'error' } | null>(null);
+  const [notification, setNotification] = useState<{
+    id: number;
+    message: string;
+    type?: 'info' | 'error';
+    duration: number;
+  } | null>(null);
+  const [challengeTimer, setChallengeTimer] = useState<number>(30);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const notificationTimerRef = useRef<any>(null);
+
+  // Incoming challenge 30-second countdown
+  useEffect(() => {
+    if (!incomingChallenge) {
+      setChallengeTimer(30);
+      return;
+    }
+    setChallengeTimer(30);
+    const interval = setInterval(() => {
+      setChallengeTimer((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          handleRespondChallenge(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [incomingChallenge?.id]);
+
+  const showNotification = (
+    message: string,
+    type: 'info' | 'error' = 'info',
+    durationMs: number = 6000
+  ) => {
+    if (notificationTimerRef.current) {
+      clearTimeout(notificationTimerRef.current);
+    }
+    const finalDuration = Math.max(5000, durationMs);
+    const notifId = Date.now();
+    setNotification({
+      id: notifId,
+      message,
+      type,
+      duration: finalDuration,
+    });
+    notificationTimerRef.current = setTimeout(() => {
+      setNotification((curr) => (curr?.id === notifId ? null : curr));
+    }, finalDuration);
+  };
 
   // Initialize WebSocket connection with automatic reconnect
   useEffect(() => {
@@ -283,14 +336,33 @@ export default function App() {
     };
   }, []);
 
-  // Update presence heartbeat in Firestore
+  // Update presence heartbeat in Firestore and subscribe to real-time incoming challenges
   useEffect(() => {
     if (!currentUser) return;
     updatePresenceHeartbeat(currentUser.id);
     const interval = setInterval(() => {
       updatePresenceHeartbeat(currentUser.id);
     }, 15000);
-    return () => clearInterval(interval);
+
+    const unsubscribeChallenges = subscribeToIncomingChallenges(
+      currentUser.id,
+      (challenge) => {
+        if (challenge) {
+          setIncomingChallenge(challenge);
+          sounds.playChallenge();
+          showNotification(
+            `⚔️ ${challenge.fromUser.username} challenged you to a Checkers match!`,
+            'info',
+            8000
+          );
+        }
+      }
+    );
+
+    return () => {
+      clearInterval(interval);
+      unsubscribeChallenges();
+    };
   }, [currentUser]);
 
   const sendWs = (type: string, payload: any) => {
@@ -299,13 +371,6 @@ export default function App() {
     } else {
       console.warn(`WebSocket message deferred/skipped (${type}) as server is offline or connecting.`);
     }
-  };
-
-  const showNotification = (message: string, type: 'info' | 'error' = 'info') => {
-    setNotification({ message, type });
-    setTimeout(() => {
-      setNotification(null);
-    }, 4000);
   };
 
   const handleAuthSuccess = (userProfile: UserProfile) => {
@@ -324,24 +389,70 @@ export default function App() {
         // ignore
       }
     }
-    showNotification(`Welcome to Checkers Arena, ${userProfile.username}!`);
+    showNotification(`Welcome to Checkers Arena, ${userProfile.username}!`, 'info', 6000);
   };
 
-  const handleSendChallenge = (targetUserId: string) => {
+  const handleSendChallenge = async (targetUserId: string) => {
     const targetUser = onlineUsers.find((u) => u.id === targetUserId);
     sounds.playChallenge();
     sendWs('challenge:send', { targetUserId, targetUser });
+    if (currentUser && targetUser) {
+      try {
+        const cId = await sendChallengeToFirestore(currentUser, targetUser);
+        if (cId) {
+          const unsub = subscribeToChallengeDoc(cId, (snapData) => {
+            if (snapData?.status === 'accepted' && snapData.roomId) {
+              unsub();
+              subscribeToGameRoom(snapData.roomId, (roomData) => {
+                if (roomData) setActiveRoom(roomData);
+              });
+            } else if (snapData?.status === 'declined') {
+              unsub();
+              showNotification(
+                `${targetUser.username} declined your challenge.`,
+                'info',
+                6000
+              );
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('Firestore backup challenge sync error:', err);
+      }
+    }
     showNotification(
-      `Challenge sent to ${targetUser?.username || 'player'}! Waiting for response...`
+      `Challenge sent to ${targetUser?.username || 'player'}! Waiting for response...`,
+      'info',
+      6000
     );
   };
 
-  const handleRespondChallenge = (accept: boolean) => {
+  const handleRespondChallenge = async (accept: boolean) => {
     if (!incomingChallenge) return;
     sendWs('challenge:respond', {
       challengeId: incomingChallenge.id,
       accept,
     });
+    if (currentUser && incomingChallenge.fromUser) {
+      try {
+        const roomId = await respondToChallengeInFirestore(
+          incomingChallenge.id,
+          accept,
+          incomingChallenge.fromUser,
+          currentUser
+        );
+        if (roomId && accept) {
+          subscribeToGameRoom(roomId, (roomData) => {
+            if (roomData) setActiveRoom(roomData);
+          });
+        }
+      } catch (err) {
+        console.warn('respondToChallengeInFirestore error:', err);
+      }
+    }
+    if (!accept) {
+      showNotification('Challenge declined.', 'info', 5000);
+    }
     setIncomingChallenge(null);
   };
 
@@ -725,17 +836,40 @@ export default function App() {
 
   return (
     <div className="h-screen max-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col selection:bg-amber-500 selection:text-slate-950 overflow-hidden">
-      {/* Toast Notification */}
+      {/* Toast Notification (Displays for at least 5-6 seconds) */}
       {notification && (
         <div
-          className={`fixed top-4 right-4 z-50 flex items-center gap-2.5 px-4 py-3 rounded-2xl shadow-2xl text-xs sm:text-sm font-bold border animate-slide-down ${
+          key={notification.id}
+          className={`fixed top-4 right-4 z-50 flex flex-col overflow-hidden max-w-sm sm:max-w-md rounded-2xl shadow-2xl text-xs sm:text-sm font-bold border backdrop-blur-md animate-slide-down ${
             notification.type === 'error'
-              ? 'bg-rose-950 border-rose-800 text-rose-200'
-              : 'bg-amber-950 border-amber-800 text-amber-200'
+              ? 'bg-rose-950/95 border-rose-700 text-rose-200 shadow-rose-950/50'
+              : 'bg-slate-900/95 border-amber-500/80 text-amber-200 shadow-amber-950/40'
           }`}
         >
-          <Bell className="w-4 h-4 text-amber-400" />
-          <span>{notification.message}</span>
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Bell className="w-4 h-4 text-amber-400 shrink-0 animate-bounce" />
+              <span className="leading-snug">{notification.message}</span>
+            </div>
+            <button
+              onClick={() => setNotification(null)}
+              className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/80 transition shrink-0 ml-2"
+              title="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          {/* Animated 5-6 second duration progress line */}
+          <div className="w-full bg-slate-800/60 h-1">
+            <div
+              className={`h-full ${
+                notification.type === 'error' ? 'bg-rose-500' : 'bg-amber-400'
+              }`}
+              style={{
+                animation: `shrinkWidth ${notification.duration}ms linear forwards`,
+              }}
+            />
+          </div>
         </div>
       )}
 
@@ -835,15 +969,26 @@ export default function App() {
       {/* Incoming Match Challenge Dialog Overlay */}
       {incomingChallenge && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in">
-          <div className="w-full max-w-sm bg-slate-900 border-2 border-amber-500 rounded-3xl p-6 text-center space-y-5 shadow-2xl">
+          <div className="w-full max-w-sm bg-slate-900 border-2 border-amber-500/90 rounded-3xl p-6 text-center space-y-5 shadow-2xl relative overflow-hidden">
+            {/* Top countdown progress line */}
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-slate-800">
+              <div
+                className="h-full bg-gradient-to-r from-amber-400 to-red-500 transition-all duration-1000"
+                style={{ width: `${(challengeTimer / 30) * 100}%` }}
+              />
+            </div>
+
             <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-amber-500 text-slate-950 shadow-lg">
               <Swords className="w-7 h-7 animate-bounce" />
             </div>
 
-            <div className="space-y-1">
+            <div className="space-y-1.5">
+              <div className="inline-block px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-[10px] font-black text-amber-400">
+                Expires in {challengeTimer}s
+              </div>
               <h3 className="text-lg font-black text-white">Incoming Match Challenge!</h3>
-              <p className="text-xs text-slate-400">
-                <strong className="text-amber-400">{incomingChallenge.fromUser.username}</strong> ({incomingChallenge.fromUser.rating || incomingChallenge.fromUser.elo || 1200} ELO) has challenged you to a checkers match!
+              <p className="text-xs text-slate-400 leading-relaxed">
+                <strong className="text-amber-400">{incomingChallenge.fromUser.username}</strong> ({incomingChallenge.fromUser.rating || incomingChallenge.fromUser.elo || 1200} ELO) has challenged you to an online Checkers duel!
               </p>
             </div>
 
@@ -851,7 +996,7 @@ export default function App() {
               <AvatarBadge avatarId={incomingChallenge.fromUser.avatarId} size="lg" />
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex gap-3 pt-1">
               <button
                 onClick={() => handleRespondChallenge(false)}
                 className="flex-1 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition active:scale-95"
@@ -862,7 +1007,7 @@ export default function App() {
                 onClick={() => handleRespondChallenge(true)}
                 className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-red-500 hover:from-amber-400 hover:to-red-400 text-slate-950 font-black text-xs shadow-lg transition active:scale-95"
               >
-                Accept Challenge
+                Accept ({challengeTimer}s)
               </button>
             </div>
           </div>

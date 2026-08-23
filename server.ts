@@ -205,6 +205,7 @@ wss.on('connection', (ws: WebSocket) => {
 
           const cleanUsername = username.trim();
           let userProfile: UserProfile;
+          const targetId = existingUserId || `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
           // Check if existing user by ID or lowercased username
           const existingUser =
@@ -216,13 +217,14 @@ wss.on('connection', (ws: WebSocket) => {
           if (existingUser) {
             userProfile = {
               ...existingUser,
+              id: targetId,
+              username: cleanUsername,
               avatarId: avatarId || existingUser.avatarId,
               status: 'online',
             };
           } else {
-            const newId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
             userProfile = {
-              id: newId,
+              id: targetId,
               username: cleanUsername,
               avatarId: avatarId || 'avatar-crown',
               wins: 0,
@@ -311,6 +313,12 @@ wss.on('connection', (ws: WebSocket) => {
             usersMap.set(targetUser.id, targetUser);
           }
 
+          if (!toUser) {
+            toUser = Array.from(usersMap.values()).find(
+              (u) => u.username.toLowerCase() === targetUser?.username?.toLowerCase()
+            );
+          }
+
           if (!fromUser || !toUser) {
             ws.send(
               JSON.stringify({
@@ -320,7 +328,7 @@ wss.on('connection', (ws: WebSocket) => {
             );
             return;
           }
-          if (targetUserId === currentUserId) return;
+          if (targetUserId === currentUserId || toUser.id === fromUser.id) return;
 
           const challengeId = `ch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           const challenge: Challenge = {
@@ -333,10 +341,26 @@ wss.on('connection', (ws: WebSocket) => {
 
           activeChallenges.set(challengeId, challenge);
 
-          const targetSocket = userSockets.get(targetUserId);
+          // Find socket for toUser (by targetUserId, by toUser.id, or matching socket user)
+          let targetSocket = userSockets.get(targetUserId) || userSockets.get(toUser.id);
+          if (!targetSocket) {
+            for (const [uid, sock] of userSockets.entries()) {
+              const u = usersMap.get(uid);
+              if (u && (u.id === targetUserId || u.username.toLowerCase() === toUser.username.toLowerCase())) {
+                targetSocket = sock;
+                break;
+              }
+            }
+          }
+
           if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-            // Real online player with active socket
-            sendToUser(targetUserId, 'challenge:received', challenge);
+            // Real online player with active socket -> send to recipient's screen
+            targetSocket.send(
+              JSON.stringify({
+                type: 'challenge:received',
+                payload: challenge,
+              })
+            );
             ws.send(
               JSON.stringify({
                 type: 'challenge:sent_ack',
