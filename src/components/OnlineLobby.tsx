@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { UserProfile, GameRoom } from '../types';
 import { AvatarBadge } from './AvatarBadge';
 import {
@@ -10,14 +10,19 @@ import {
   Trophy,
   Flame,
   Settings,
+  X,
+  Sparkles,
+  Zap,
+  ShieldAlert,
 } from 'lucide-react';
+import { BOT_DIFFICULTIES, BotDifficulty } from '../lib/botEngine';
 
 interface OnlineLobbyProps {
   currentUser: UserProfile;
   onlineUsers: UserProfile[];
   gameRooms: GameRoom[];
   onSendChallenge: (targetUserId: string) => void;
-  onCreateCustomGame: (vsBot: boolean) => void;
+  onCreateCustomGame: (vsBot: boolean, botDifficulty?: BotDifficulty) => void;
   onJoinGameRoom: (roomId: string) => void;
   onOpenLeaderboard: () => void;
   onOpenSettings: () => void;
@@ -33,16 +38,22 @@ export const OnlineLobby: React.FC<OnlineLobbyProps> = ({
   onOpenLeaderboard,
   onOpenSettings,
 }) => {
+  const [showBotModal, setShowBotModal] = useState(false);
   // Filter out self from online players list
   const otherOnlinePlayers = onlineUsers.filter((u) => u.id !== currentUser.id);
 
+  const handleStartBotGame = (difficulty: BotDifficulty) => {
+    setShowBotModal(false);
+    onCreateCustomGame(true, difficulty);
+  };
+
   return (
-    <div className="w-full max-w-7xl mx-auto h-[calc(100vh-64px)] max-h-[calc(100vh-64px)] p-2.5 sm:p-4 flex flex-col justify-between gap-3 overflow-hidden select-none">
+    <div className="w-full max-w-7xl mx-auto h-[calc(100vh-64px)] max-h-[calc(100vh-64px)] p-2 sm:p-4 flex flex-col justify-between gap-2.5 overflow-hidden select-none">
       {/* Top Banner / Play Action Bar */}
-      <div className="relative overflow-hidden rounded-2xl sm:rounded-3xl bg-gradient-to-r from-slate-900 via-amber-950/30 to-slate-900 border border-slate-800 p-3 sm:p-4 shadow-xl shrink-0">
-        <div className="relative z-10 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <div className="relative overflow-hidden rounded-2xl sm:rounded-3xl bg-gradient-to-r from-slate-900 via-amber-950/30 to-slate-900 border border-slate-800 p-2.5 sm:p-4 shadow-xl shrink-0">
+        <div className="relative z-10 flex flex-col sm:flex-row items-center justify-between gap-2.5">
           <div className="space-y-0.5 text-center sm:text-left min-w-0">
-            <h2 className="text-lg sm:text-2xl font-black text-white tracking-tight truncate">
+            <h2 className="text-base sm:text-2xl font-black text-white tracking-tight truncate">
               Welcome, <span className="text-amber-400">{currentUser.username}</span>
             </h2>
             <p className="text-xs text-slate-400 truncate max-w-md hidden sm:block">
@@ -51,9 +62,9 @@ export const OnlineLobby: React.FC<OnlineLobbyProps> = ({
           </div>
 
           <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
-            {/* Play vs Bot */}
+            {/* Play vs Bot (opens difficulty selection modal) */}
             <button
-              onClick={() => onCreateCustomGame(true)}
+              onClick={() => setShowBotModal(true)}
               className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-100 font-bold text-xs border border-slate-700 shadow-md transition transform active:scale-95"
             >
               <Bot className="w-4 h-4 text-amber-400" />
@@ -81,14 +92,14 @@ export const OnlineLobby: React.FC<OnlineLobbyProps> = ({
         </div>
       </div>
 
-      {/* Main Content Grid: Online Players & Active Game Tables (Static, non-scrolling container with internal smooth lists) */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-3 min-h-0 overflow-hidden">
+      {/* Main Content Grid: Online Players & Active Game Tables */}
+      <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-2.5 min-h-0 overflow-hidden">
         {/* Left Column: Online Players List */}
-        <div className="bg-slate-900/70 border border-slate-800/90 rounded-2xl p-3 sm:p-3.5 flex flex-col justify-between shadow-lg overflow-hidden min-h-0">
+        <div className="bg-slate-900/70 border border-slate-800/90 rounded-2xl p-2.5 sm:p-3.5 flex flex-col justify-between shadow-lg overflow-hidden min-h-0">
           <div className="flex items-center justify-between border-b border-slate-800 pb-2 shrink-0">
             <div className="flex items-center gap-2">
               <Users className="w-4 h-4 text-amber-400" />
-              <h3 className="text-sm sm:text-base font-black text-white">Online Players</h3>
+              <h3 className="text-xs sm:text-base font-black text-white">Online Players</h3>
               <span className="px-2 py-0.5 rounded-full bg-slate-800 text-amber-400 text-[10px] font-bold border border-slate-700">
                 {otherOnlinePlayers.length}
               </span>
@@ -157,11 +168,11 @@ export const OnlineLobby: React.FC<OnlineLobbyProps> = ({
         </div>
 
         {/* Right Column: Active Game Tables */}
-        <div className="bg-slate-900/70 border border-slate-800/90 rounded-2xl p-3 sm:p-3.5 flex flex-col justify-between shadow-lg overflow-hidden min-h-0">
+        <div className="bg-slate-900/70 border border-slate-800/90 rounded-2xl p-2.5 sm:p-3.5 flex flex-col justify-between shadow-lg overflow-hidden min-h-0">
           <div className="flex items-center justify-between border-b border-slate-800 pb-2 shrink-0">
             <div className="flex items-center gap-2">
               <Flame className="w-4 h-4 text-rose-400" />
-              <h3 className="text-sm sm:text-base font-black text-white">Active Game Tables</h3>
+              <h3 className="text-xs sm:text-base font-black text-white">Active Game Tables</h3>
               <span className="px-2 py-0.5 rounded-full bg-slate-800 text-rose-400 text-[10px] font-bold border border-slate-700">
                 {gameRooms.length}
               </span>
@@ -229,6 +240,70 @@ export const OnlineLobby: React.FC<OnlineLobbyProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Bot Difficulty Selection Modal */}
+      {showBotModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 space-y-4 shadow-2xl relative">
+            <button
+              onClick={() => setShowBotModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full bg-slate-800 text-slate-400 hover:text-white transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="text-center space-y-1">
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/40 mb-1">
+                <Bot className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg sm:text-xl font-black text-white">
+                Select Bot Difficulty
+              </h3>
+              <p className="text-xs text-slate-400">
+                Choose your AI opponent level to practice your strategies.
+              </p>
+            </div>
+
+            <div className="space-y-2.5">
+              {(Object.keys(BOT_DIFFICULTIES) as BotDifficulty[]).map((diffKey) => {
+                const config = BOT_DIFFICULTIES[diffKey];
+                return (
+                  <button
+                    key={diffKey}
+                    onClick={() => handleStartBotGame(diffKey)}
+                    className="w-full text-left p-3 rounded-2xl bg-slate-950 hover:bg-slate-850 border border-slate-800 hover:border-amber-400/60 transition group flex items-center justify-between gap-3 shadow active:scale-98"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="text-2xl shrink-0 p-2 rounded-xl bg-slate-900 border border-slate-800 group-hover:scale-110 transition">
+                        {config.icon}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-black text-sm text-white group-hover:text-amber-400 transition">
+                            {config.name}
+                          </span>
+                          <span
+                            className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${config.badgeColor}`}
+                          >
+                            {config.rating} ELO
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                          {config.subtitle}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 text-slate-500 group-hover:text-amber-400 group-hover:translate-x-1 transition font-bold text-sm">
+                      Play &rarr;
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

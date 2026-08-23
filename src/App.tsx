@@ -33,6 +33,7 @@ import {
   checkGameOver,
   getBestBotMove,
 } from './lib/checkersEngine';
+import { getBotMoveForDifficulty, BotDifficulty, BOT_DIFFICULTIES } from './lib/botEngine';
 import { Swords, X, Check, Bell } from 'lucide-react';
 
 export default function App() {
@@ -396,7 +397,8 @@ export default function App() {
         }
 
         const botColor = 'black';
-        const bestMove = getBestBotMove(latestRoom.board, botColor);
+        const botDiff = latestRoom.botDifficulty || 'medium';
+        const bestMove = getBotMoveForDifficulty(latestRoom.board, botColor, botDiff);
         if (!bestMove) {
           const over = checkGameOver(latestRoom.board, botColor);
           recordGameOutcome('red', 'red');
@@ -450,10 +452,10 @@ export default function App() {
           lastMoveTimestamp: Date.now(),
         };
       });
-    }, 600);
+    }, 550);
   };
 
-  const handleCreateCustomGame = (vsBot: boolean) => {
+  const handleCreateCustomGame = (vsBot: boolean, botDifficulty: BotDifficulty = 'medium') => {
     const player = currentUser || {
       id: 'guest_' + Math.random().toString(36).substring(2, 9),
       username: 'GuestPlayer',
@@ -472,10 +474,12 @@ export default function App() {
 
     if (vsBot) {
       const initialBoard = createInitialBoard();
+      const diffConfig = BOT_DIFFICULTIES[botDifficulty] || BOT_DIFFICULTIES.medium;
       const botRoom: GameRoom = {
         id: `room_bot_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        name: `${player.username} vs Checkers Bot`,
+        name: `${player.username} vs Bot (${diffConfig.name})`,
         status: 'playing',
+        botDifficulty,
         redPlayer: {
           id: player.id,
           username: player.username,
@@ -485,11 +489,12 @@ export default function App() {
         },
         blackPlayer: {
           id: 'bot_ai',
-          username: 'Checkers Bot (AI)',
+          username: `Bot: ${diffConfig.name}`,
           avatarId: 'avatar-cyber',
-          rating: 1350,
+          rating: diffConfig.rating,
           color: 'black',
           isBot: true,
+          botDifficulty,
         },
         currentTurn: 'red',
         board: initialBoard,
@@ -506,10 +511,10 @@ export default function App() {
 
       setActiveRoom(botRoom);
       sounds.playMove();
-      showNotification('Practice vs Checkers AI Bot started!', 'info');
+      showNotification(`Practice vs ${diffConfig.name} started!`, 'info');
 
       // Send to server if connected
-      sendWs('game:create_custom', { vsBot: true });
+      sendWs('game:create_custom', { vsBot: true, botDifficulty });
     } else {
       const initialBoard = createInitialBoard();
       const customRoom: GameRoom = {

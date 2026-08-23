@@ -66,6 +66,7 @@ export interface GamePlayer {
   rating: number;
   color: PieceColor;
   isBot?: boolean;
+  botDifficulty?: 'easy' | 'medium' | 'hard';
 }
 
 export type GameStatus = 'waiting' | 'playing' | 'ended';
@@ -89,6 +90,7 @@ export interface GameRoom {
   turnDeadline: number | null;
   spectatorsCount: number;
   isPrivate?: boolean;
+  botDifficulty?: 'easy' | 'medium' | 'hard';
 }
 
 export interface Challenge {

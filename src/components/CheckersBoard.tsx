@@ -170,10 +170,10 @@ export const CheckersBoard: React.FC<CheckersBoardProps> = ({
   };
 
   return (
-    <div className="relative flex items-center justify-center select-none w-full h-full max-h-full p-1 sm:p-2">
-      {/* Board Outer Wooden / Theme Frame */}
+    <div className="relative flex items-center justify-center select-none w-full h-full max-h-full p-0.5 sm:p-2 overflow-hidden">
+      {/* Board Outer Wooden / Theme Frame - Takes 95% of screen area */}
       <div
-        className="w-[min(94vw,65vh,520px)] h-[min(94vw,65vh,520px)] aspect-square p-2.5 sm:p-3.5 rounded-2xl sm:rounded-3xl border-2 sm:border-4 shadow-2xl flex flex-col justify-between"
+        className="w-[min(96vw,calc(100vh-110px),580px)] h-[min(96vw,calc(100vh-110px),580px)] aspect-square p-2 sm:p-3 rounded-2xl sm:rounded-3xl border-2 sm:border-4 shadow-2xl flex flex-col justify-between"
         style={{
           backgroundColor: template.frameHex,
           borderColor: template.borderHex,
