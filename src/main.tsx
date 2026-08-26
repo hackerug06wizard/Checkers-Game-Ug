@@ -99,6 +99,30 @@ if (typeof window !== 'undefined') {
   } catch (e) {
     console.warn('process polyfill warning:', e);
   }
+
+  // 4. Register Service Worker for PWA / Android installed app updates
+  if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((registration) => {
+          registration.addEventListener('updatefound', () => {
+            const newWorker = registration.installing;
+            if (newWorker) {
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  // New update available, notify or auto-refresh
+                  console.log('New update available for installed Checkers app.');
+                }
+              });
+            }
+          });
+        })
+        .catch((err) => {
+          console.warn('Service worker registration ignored:', err);
+        });
+    });
+  }
 }
 
 createRoot(document.getElementById('root')!).render(

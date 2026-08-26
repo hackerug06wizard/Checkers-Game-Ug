@@ -183,20 +183,45 @@ export const AndroidInstallModal: React.FC<AndroidInstallModalProps> = ({
           ) : (
             <button
               onClick={handleInstallClick}
-              className="w-full py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-xs shadow-md transition flex items-center justify-center gap-2 border border-slate-700"
+              className="w-full py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-xs shadow-md transition flex items-center justify-center gap-2 border border-slate-700 cursor-pointer"
             >
               <Smartphone className="w-4 h-4 text-amber-400" />
               <span>{deferredPrompt ? 'Direct Install App on Android' : 'Add App to Home Screen'}</span>
             </button>
           )}
 
-          <button
-            onClick={handleDownloadManifest}
-            className="w-full py-2.5 rounded-2xl bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-semibold transition flex items-center justify-center gap-2 border border-slate-800"
-          >
-            <Download className="w-4 h-4 text-slate-400" />
-            <span>Download APK Native Capacitor Config</span>
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                if ('serviceWorker' in navigator) {
+                  navigator.serviceWorker.getRegistrations().then((regs) => {
+                    for (const reg of regs) {
+                      reg.update();
+                    }
+                  });
+                  caches.keys().then((names) => {
+                    for (const name of names) {
+                      caches.delete(name);
+                    }
+                  });
+                }
+                window.location.reload();
+              }}
+              className="flex-1 py-2.5 rounded-2xl bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-amber-200 text-xs font-bold transition flex items-center justify-center gap-1.5 border border-slate-800 cursor-pointer"
+              title="Force fetch latest updates in installed app"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+              <span>Refresh App Updates</span>
+            </button>
+
+            <button
+              onClick={handleDownloadManifest}
+              className="flex-1 py-2.5 rounded-2xl bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-semibold transition flex items-center justify-center gap-1.5 border border-slate-800 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5 text-slate-400" />
+              <span>Export App Config</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

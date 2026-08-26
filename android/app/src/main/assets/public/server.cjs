@@ -157,7 +157,7 @@ function getValidMovesForPiece(board, piece) {
   }
   return [...jumps, ...simpleMoves];
 }
-function getValidMovesForPlayer(board, color) {
+function getValidMovesForPlayer(board, color, forcedJumps = true) {
   const movesPerPiece = [];
   const playerPieces = [];
   for (let r = 0; r < 8; r++) {
@@ -171,6 +171,10 @@ function getValidMovesForPlayer(board, color) {
   for (const piece of playerPieces) {
     const pieceMoves = getValidMovesForPiece(board, piece);
     movesPerPiece.push(...pieceMoves);
+  }
+  const jumpMoves = movesPerPiece.filter((m) => m.captures && m.captures.length > 0);
+  if (forcedJumps && jumpMoves.length > 0) {
+    return jumpMoves;
   }
   return movesPerPiece;
 }
@@ -311,20 +315,14 @@ function validateUsername(username) {
     return { valid: false, message: "Username is required." };
   }
   const trimmed = username.trim();
-  if (trimmed.length < 2 || trimmed.length > 20) {
-    return { valid: false, message: "Username must be between 2 and 20 characters." };
+  if (trimmed.length < 2 || trimmed.length > 25) {
+    return { valid: false, message: "Username must be between 2 and 25 characters." };
   }
-  if (/\d/.test(trimmed)) {
-    return {
-      valid: false,
-      message: "Numbers/digits are strictly NOT allowed in usernames! Please use only letters."
-    };
-  }
-  const validCharsRegex = /^[a-zA-Z\s_-]+$/;
+  const validCharsRegex = /^[a-zA-Z0-9\s_-]+$/;
   if (!validCharsRegex.test(trimmed)) {
     return {
       valid: false,
-      message: "Usernames can only contain letters, spaces, hyphens, and underscores."
+      message: "Usernames can only contain letters, numbers, spaces, hyphens, and underscores."
     };
   }
   return { valid: true };
@@ -338,7 +336,23 @@ function broadcast(type, payload) {
   });
 }
 function sendToUser(userId, type, payload) {
-  const ws = userSockets.get(userId);
+  let ws = userSockets.get(userId);
+  if (!ws || ws.readyState !== import_ws.WebSocket.OPEN) {
+    const targetUser = usersMap.get(userId);
+    for (const [uid, sock] of userSockets.entries()) {
+      if (sock.readyState === import_ws.WebSocket.OPEN) {
+        if (uid === userId) {
+          ws = sock;
+          break;
+        }
+        const u = usersMap.get(uid);
+        if (targetUser && u && u.username.toLowerCase() === targetUser.username.toLowerCase()) {
+          ws = sock;
+          break;
+        }
+      }
+    }
+  }
   if (ws && ws.readyState === import_ws.WebSocket.OPEN) {
     ws.send(JSON.stringify({ type, payload }));
   }
@@ -412,19 +426,21 @@ wss.on("connection", (ws) => {
           }
           const cleanUsername = username.trim();
           let userProfile;
+          const targetId = existingUserId || `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
           const existingUser = existingUserId && usersMap.get(existingUserId) || Array.from(usersMap.values()).find(
             (u) => u.username.toLowerCase() === cleanUsername.toLowerCase()
           );
           if (existingUser) {
             userProfile = {
               ...existingUser,
+              id: targetId,
+              username: cleanUsername,
               avatarId: avatarId || existingUser.avatarId,
               status: "online"
             };
           } else {
-            const newId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
             userProfile = {
-              id: newId,
+              id: targetId,
               username: cleanUsername,
               avatarId: avatarId || "avatar-crown",
               wins: 0,
@@ -496,11 +512,28 @@ wss.on("connection", (ws) => {
         case "challenge:send": {
           if (!currentUserId) return;
           const fromUser = usersMap.get(currentUserId);
-          const { targetUserId } = payload;
-          const toUser = usersMap.get(targetUserId);
-          if (!fromUser || !toUser) return;
-          if (targetUserId === currentUserId) return;
-          const challengeId = `ch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          const { targetUserId, targetUser, challengeId: customChallengeId } = payload;
+          let toUser = usersMap.get(targetUserId);
+          if (!toUser && targetUser) {
+            toUser = targetUser;
+            usersMap.set(targetUser.id, targetUser);
+          }
+          if (!toUser) {
+            toUser = Array.from(usersMap.values()).find(
+              (u) => u.username.toLowerCase() === targetUser?.username?.toLowerCase()
+            );
+          }
+          if (!fromUser || !toUser) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                payload: { message: "Target player not available." }
+              })
+            );
+            return;
+          }
+          if (targetUserId === currentUserId || toUser.id === fromUser.id) return;
+          const challengeId = customChallengeId || `ch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           const challenge = {
             id: challengeId,
             fromUser,
@@ -509,20 +542,99 @@ wss.on("connection", (ws) => {
             status: "pending"
           };
           activeChallenges.set(challengeId, challenge);
-          sendToUser(targetUserId, "challenge:received", challenge);
-          ws.send(
-            JSON.stringify({
-              type: "challenge:sent_ack",
-              payload: challenge
-            })
-          );
+          let targetSocket = userSockets.get(targetUserId) || userSockets.get(toUser.id);
+          if (!targetSocket) {
+            for (const [uid, sock] of userSockets.entries()) {
+              const u = usersMap.get(uid);
+              if (u && (u.id === targetUserId || u.username.toLowerCase() === toUser.username.toLowerCase())) {
+                targetSocket = sock;
+                break;
+              }
+            }
+          }
+          if (targetSocket && targetSocket.readyState === import_ws.WebSocket.OPEN) {
+            targetSocket.send(
+              JSON.stringify({
+                type: "challenge:received",
+                payload: challenge
+              })
+            );
+            ws.send(
+              JSON.stringify({
+                type: "challenge:sent_ack",
+                payload: challenge
+              })
+            );
+          } else {
+            ws.send(
+              JSON.stringify({
+                type: "challenge:sent_ack",
+                payload: challenge
+              })
+            );
+            setTimeout(() => {
+              if (activeChallenges.has(challengeId)) {
+                const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+                const initialBoard = createInitialBoard();
+                const redPlayer = {
+                  id: fromUser.id,
+                  username: fromUser.username,
+                  avatarId: fromUser.avatarId,
+                  rating: fromUser.rating || 1200,
+                  color: "red"
+                };
+                const blackPlayer = {
+                  id: toUser.id,
+                  username: toUser.username,
+                  avatarId: toUser.avatarId,
+                  rating: toUser.rating || 1200,
+                  color: "black",
+                  isBot: true
+                };
+                const room = {
+                  id: roomId,
+                  name: `${redPlayer.username} vs ${blackPlayer.username}`,
+                  status: "playing",
+                  redPlayer,
+                  blackPlayer,
+                  currentTurn: "red",
+                  board: initialBoard,
+                  history: [],
+                  capturedRed: 0,
+                  capturedBlack: 0,
+                  winner: null,
+                  createdAt: Date.now(),
+                  lastMoveTimestamp: Date.now(),
+                  turnTimeLimitSeconds: 45,
+                  turnDeadline: Date.now() + 45e3,
+                  spectatorsCount: 0
+                };
+                activeRooms.set(roomId, room);
+                activeChallenges.delete(challengeId);
+                broadcast("lobby:rooms", Array.from(activeRooms.values()));
+                sendToUser(fromUser.id, "game:started", room);
+              }
+            }, 600);
+          }
           break;
         }
         case "challenge:respond": {
           if (!currentUserId) return;
-          const { challengeId, accept } = payload;
-          const challenge = activeChallenges.get(challengeId);
-          if (!challenge) return;
+          const { challengeId, accept, roomId: customRoomId, fromUser: fallbackFromUser, toUser: fallbackToUser } = payload;
+          let challenge = activeChallenges.get(challengeId);
+          if (!challenge && fallbackFromUser && fallbackToUser) {
+            challenge = {
+              id: challengeId,
+              fromUser: fallbackFromUser,
+              toUser: fallbackToUser,
+              createdAt: Date.now(),
+              status: "pending"
+            };
+          }
+          if (!challenge) {
+            console.warn(`Challenge ${challengeId} not found in activeChallenges`);
+            return;
+          }
           if (!accept) {
             challenge.status = "declined";
             sendToUser(challenge.fromUser.id, "challenge:declined", {
@@ -533,21 +645,21 @@ wss.on("connection", (ws) => {
             return;
           }
           challenge.status = "accepted";
-          const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          const roomId = customRoomId || `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           const initialBoard = createInitialBoard();
           const isFromRed = Math.random() < 0.5;
           const redPlayer = {
             id: isFromRed ? challenge.fromUser.id : challenge.toUser.id,
             username: isFromRed ? challenge.fromUser.username : challenge.toUser.username,
             avatarId: isFromRed ? challenge.fromUser.avatarId : challenge.toUser.avatarId,
-            rating: isFromRed ? challenge.fromUser.rating : challenge.toUser.rating,
+            rating: isFromRed ? challenge.fromUser.rating || 1200 : challenge.toUser.rating || 1200,
             color: "red"
           };
           const blackPlayer = {
             id: isFromRed ? challenge.toUser.id : challenge.fromUser.id,
             username: isFromRed ? challenge.toUser.username : challenge.fromUser.username,
             avatarId: isFromRed ? challenge.toUser.avatarId : challenge.fromUser.avatarId,
-            rating: isFromRed ? challenge.toUser.rating : challenge.fromUser.rating,
+            rating: isFromRed ? challenge.toUser.rating || 1200 : challenge.fromUser.rating || 1200,
             color: "black"
           };
           const room = {
@@ -585,8 +697,8 @@ wss.on("connection", (ws) => {
           if (!currentUserId) return;
           const user = usersMap.get(currentUserId);
           if (!user) return;
-          const { name, vsBot, timeLimit } = payload;
-          const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          const { name, vsBot, timeLimit, roomId: customRoomId } = payload;
+          const roomId = customRoomId || `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           const initialBoard = createInitialBoard();
           const humanPlayer = {
             id: user.id,
@@ -899,14 +1011,11 @@ function handleGameEnd(room) {
   broadcastPresence();
 }
 function broadcastToRoom(room, type, payload) {
-  const msg = JSON.stringify({ type, payload });
-  if (room.redPlayer && userSockets.has(room.redPlayer.id)) {
-    const ws = userSockets.get(room.redPlayer.id);
-    if (ws?.readyState === import_ws.WebSocket.OPEN) ws.send(msg);
+  if (room.redPlayer) {
+    sendToUser(room.redPlayer.id, type, payload);
   }
-  if (room.blackPlayer && userSockets.has(room.blackPlayer.id)) {
-    const ws = userSockets.get(room.blackPlayer.id);
-    if (ws?.readyState === import_ws.WebSocket.OPEN) ws.send(msg);
+  if (room.blackPlayer) {
+    sendToUser(room.blackPlayer.id, type, payload);
   }
 }
 async function startServer() {

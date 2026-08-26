@@ -1,22 +1,39 @@
 {
   "short_name": "Checkers",
-  "name": "Checkers Online - Android App",
-  "description": "Real-time multiplayer checkers game with AI bot, online matchmaking, and landscape mobile orientation.",
+  "name": "Checkers Online Arena",
+  "description": "Real-time multiplayer checkers game with AI bot, online matchmaking, game tables, ranking titles, and landscape mobile orientation.",
+  "id": "/?source=pwa",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "categories": ["games", "entertainment", "strategy"],
   "icons": [
     {
-      "src": "https://images.unsplash.com/photo-1611195974226-a6a9be9dd763?w=192&auto=format&fit=crop&q=80",
-      "type": "image/jpeg",
-      "sizes": "192x192"
+      "src": "/app-icon.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
     },
     {
-      "src": "https://images.unsplash.com/photo-1611195974226-a6a9be9dd763?w=512&auto=format&fit=crop&q=80",
-      "type": "image/jpeg",
-      "sizes": "512x512"
+      "src": "/app-icon.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any"
     }
-  ],
-  "start_url": "/",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
-  "display": "standalone",
-  "orientation": "any"
+  ]
 }
