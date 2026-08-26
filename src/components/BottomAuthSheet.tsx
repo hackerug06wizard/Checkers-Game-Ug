@@ -4,6 +4,8 @@ import {
   signInWithGoogle,
   saveUserProfileToFirestore,
   getUserProfileFromFirestore,
+  isPhoneNumberTaken,
+  normalizePhoneNumber,
 } from '../lib/firebase';
 import { sounds } from '../lib/sound';
 import { AppLogo } from './AppLogo';
@@ -18,6 +20,7 @@ import {
   X,
   UserCheck,
   Gamepad2,
+  PlusCircle,
 } from 'lucide-react';
 
 interface BottomAuthSheetProps {
@@ -182,6 +185,14 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
       const fullPhone = `${countryCode} ${phoneNumber.trim()}`;
       const uid = tempUid || `user_${Date.now()}`;
 
+      // Check if phone number is already used by another account
+      const alreadyTaken = await isPhoneNumberTaken(fullPhone, uid);
+      if (alreadyTaken) {
+        setError('This phone number is already registered to another account. Each phone number can only be added once in the system.');
+        setLoading(false);
+        return;
+      }
+
       let profile: UserProfile | null = await getUserProfileFromFirestore(uid);
 
       if (!profile) {
@@ -190,6 +201,8 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
           username: selectedName || selectedEmail.split('@')[0] || 'Player',
           realName: selectedName,
           phoneNumber: fullPhone,
+          normalizedPhone: normalizePhoneNumber(fullPhone),
+          isGuest: false,
           avatarId: 'avatar-crown',
           termsAccepted: true,
           rating: 1200,
@@ -205,6 +218,8 @@ export const BottomAuthSheet: React.FC<BottomAuthSheetProps> = ({
         };
       } else {
         profile.phoneNumber = fullPhone;
+        profile.normalizedPhone = normalizePhoneNumber(fullPhone);
+        profile.isGuest = false;
         profile.isOnline = true;
         profile.lastActiveTimestamp = Date.now();
       }

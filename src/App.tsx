@@ -33,6 +33,9 @@ import {
   subscribeToGameRoom,
   subscribeToAllGameRooms,
   saveGameRoomToFirestore,
+  deleteGameRoomFromFirestore,
+  deleteGuestPlayerFromFirestore,
+  cleanUpAllGuestPlayersFromFirestore,
 } from './lib/firebase';
 import {
   createInitialBoard,
@@ -73,6 +76,63 @@ export default function App() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const notificationTimerRef = useRef<any>(null);
+  const handledChallengeIdsRef = useRef<Set<string>>(new Set());
+
+  // Guest Lifecycle Cleanup: clean up all existing guest players and delete guest data on page close/exit
+  useEffect(() => {
+    // 1. One-time purge of all guest player records in Firestore database
+    cleanUpAllGuestPlayersFromFirestore().catch(() => {});
+
+    // 2. Event listeners to immediately remove guest data on game exit
+    const handleExit = () => {
+      try {
+        const saved = localStorage.getItem('checkers_user_profile');
+        if (saved) {
+          const user = JSON.parse(saved);
+          if (
+            user?.isGuest ||
+            user?.id?.startsWith('guest_') ||
+            (user?.username && user?.username.toLowerCase().startsWith('guest'))
+          ) {
+            localStorage.removeItem('checkers_user_profile');
+            deleteGuestPlayerFromFirestore(user.id);
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+
+    window.addEventListener('beforeunload', handleExit);
+    window.addEventListener('unload', handleExit);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        try {
+          const saved = localStorage.getItem('checkers_user_profile');
+          if (saved) {
+            const user = JSON.parse(saved);
+            if (
+              user?.isGuest ||
+              user?.id?.startsWith('guest_') ||
+              (user?.username && user?.username.toLowerCase().startsWith('guest'))
+            ) {
+              deleteGuestPlayerFromFirestore(user.id);
+            }
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleExit);
+      window.removeEventListener('unload', handleExit);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
 
   // Incoming challenge 30-second countdown
   useEffect(() => {
@@ -248,6 +308,13 @@ export default function App() {
                 break;
               }
 
+              case 'game:table_deleted': {
+                setGameRooms((prev) => prev.filter((r) => r.id !== payload.roomId));
+                setActiveRoom((prev) => (prev?.id === payload.roomId ? null : prev));
+                showNotification(payload.message || 'Game table was closed.', 'info', 4000);
+                break;
+              }
+
               case 'game:invalid_move': {
                 showNotification(payload.message, 'error');
                 break;
@@ -363,7 +430,7 @@ export default function App() {
     const unsubscribeChallenges = subscribeToIncomingChallenges(
       currentUser.id,
       (challenge) => {
-        if (challenge) {
+        if (challenge && !handledChallengeIdsRef.current.has(challenge.id)) {
           setIncomingChallenge(challenge);
           sounds.playChallenge();
           showNotification(
@@ -472,6 +539,7 @@ export default function App() {
   const handleRespondChallenge = async (accept: boolean) => {
     if (!incomingChallenge) return;
     const challenge = incomingChallenge;
+    handledChallengeIdsRef.current.add(challenge.id);
     setIncomingChallenge(null);
 
     const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -484,7 +552,7 @@ export default function App() {
       toUser: currentUser || challenge.toUser,
     });
 
-    if (currentUser && challenge.fromUser && accept) {
+    if (currentUser && challenge.fromUser) {
       try {
         const res = await respondToChallengeInFirestore(
           challenge.id,
@@ -493,7 +561,7 @@ export default function App() {
           currentUser,
           roomId
         );
-        if (res && res.room) {
+        if (accept && res && res.room) {
           setActiveRoom(res.room);
           subscribeToGameRoom(res.roomId, (roomData) => {
             if (roomData) setActiveRoom(roomData);
@@ -507,6 +575,17 @@ export default function App() {
     if (!accept) {
       showNotification('Challenge declined.', 'info', 5000);
     }
+  };
+
+  const handleDeleteGameRoom = async (roomId: string) => {
+    sendWs('game:delete_table', { roomId });
+    await deleteGameRoomFromFirestore(roomId);
+    setGameRooms((prev) => prev.filter((r) => r.id !== roomId));
+    if (activeRoom?.id === roomId) {
+      setActiveRoom(null);
+      setGameChatMessages([]);
+    }
+    showNotification('Game table deleted and closed.', 'info', 4000);
   };
 
   const recordGameOutcome = (userColor: 'red' | 'black', winnerColor: string | null) => {
@@ -989,6 +1068,7 @@ export default function App() {
             onSendMove={handleSendMove}
             onResign={handleResign}
             onLeaveRoom={handleLeaveRoom}
+            onDeleteTable={() => handleDeleteGameRoom(activeRoom.id)}
             onSendGameChat={handleSendGameChat}
             gameChatMessages={gameChatMessages}
           />
@@ -1000,6 +1080,7 @@ export default function App() {
             onSendChallenge={handleSendChallenge}
             onCreateCustomGame={handleCreateCustomGame}
             onJoinGameRoom={handleJoinGameRoom}
+            onDeleteGameRoom={handleDeleteGameRoom}
             onOpenLeaderboard={handleOpenLeaderboard}
             onOpenSettings={() => setIsSettingsModalOpen(true)}
           />

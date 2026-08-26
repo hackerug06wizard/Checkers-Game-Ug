@@ -734,6 +734,34 @@ wss.on('connection', (ws: WebSocket) => {
           break;
         }
 
+        case 'game:delete_table': {
+          if (!currentUserId) return;
+          const { roomId } = payload;
+          const room = activeRooms.get(roomId);
+          if (!room) return;
+
+          // Only creator or admin or player in room can delete
+          const isCreator = room.redPlayer?.id === currentUserId || room.blackPlayer?.id === currentUserId;
+          if (isCreator || room.status === 'waiting') {
+            activeRooms.delete(roomId);
+            
+            // Reset player statuses
+            if (room.redPlayer) {
+              const u1 = usersMap.get(room.redPlayer.id);
+              if (u1 && u1.status === 'in-game') u1.status = 'online';
+            }
+            if (room.blackPlayer) {
+              const u2 = usersMap.get(room.blackPlayer.id);
+              if (u2 && u2.status === 'in-game') u2.status = 'online';
+            }
+
+            broadcastToRoom(room, 'game:table_deleted', { roomId, message: 'Game table has been closed and deleted.' });
+            broadcastPresence();
+            broadcast('lobby:rooms', Array.from(activeRooms.values()));
+          }
+          break;
+        }
+
         case 'game:resign': {
           if (!currentUserId) return;
           const { roomId } = payload;

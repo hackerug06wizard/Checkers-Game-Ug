@@ -23,6 +23,7 @@ import {
   User,
   Volume2,
   VolumeX,
+  Trash2,
 } from 'lucide-react';
 import { sounds } from '../lib/sound';
 import { getValidMovesForPlayer } from '../lib/checkersEngine';
@@ -38,6 +39,7 @@ interface GameRoomProps {
   onSendMove: (move: MoveOption) => void;
   onResign: () => void;
   onLeaveRoom: () => void;
+  onDeleteTable?: () => void;
   onSendGameChat: (text: string) => void;
   gameChatMessages: ChatMessage[];
 }
@@ -49,6 +51,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({
   onSendMove,
   onResign,
   onLeaveRoom,
+  onDeleteTable,
   onSendGameChat,
   gameChatMessages,
 }) => {
@@ -223,8 +226,20 @@ export const GameRoom: React.FC<GameRoomProps> = ({
           )}
         </div>
 
-        {/* Right: Resign / Spectator info / Move log toggle */}
+        {/* Right: Delete Table / Resign / Spectator info / Move log toggle */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* Delete Table button if owner or waiting */}
+          {(room.status === 'waiting' || room.redPlayer?.id === currentUser.id) && onDeleteTable && (
+            <button
+              onClick={onDeleteTable}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs border border-rose-500 shadow-md shadow-rose-950/40 transition active:scale-95"
+              title="Delete and close this Game Table"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Table</span>
+            </button>
+          )}
+
           <button
             onClick={() => setIsMoveLogOpen(!isMoveLogOpen)}
             className={`flex items-center gap-1 px-2 py-1 rounded-xl text-xs font-bold border transition ${
@@ -369,7 +384,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({
         </div>
 
         {/* CENTER STAGE: CHECKERS BOARD (95% SCREEN FIT) */}
-        <div className="flex-1 flex items-center justify-center w-full h-full max-h-full overflow-hidden min-h-0">
+        <div className="flex-1 flex items-center justify-center w-full h-full max-h-full overflow-hidden min-h-0 relative">
           <CheckersBoard
             board={room.board}
             currentTurn={room.currentTurn}
@@ -381,6 +396,34 @@ export const GameRoom: React.FC<GameRoomProps> = ({
             lastMove={lastMove}
             theme={activeTheme}
           />
+
+          {/* Waiting For Opponent Overlay on Board */}
+          {room.status === 'waiting' && (
+            <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-[2px] flex items-center justify-center p-4 z-20">
+              <div className="bg-slate-900/95 border-2 border-amber-500/80 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-fade-in">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto border border-amber-500/30">
+                  <span className="w-4 h-4 rounded-full bg-amber-400 animate-ping" />
+                </div>
+
+                <div className="space-y-1">
+                  <h3 className="text-base font-black text-white">Table Created & Waiting</h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    This game table is active in the lobby. Waiting for another player to join...
+                  </p>
+                </div>
+
+                {onDeleteTable && (
+                  <button
+                    onClick={onDeleteTable}
+                    className="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs shadow-lg shadow-rose-950/50 transition flex items-center justify-center gap-1.5 active:scale-95"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Table</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* RIGHT COMPACT SLIM FLANK (Player Profile & Quick Moves) - Visible on md+ */}

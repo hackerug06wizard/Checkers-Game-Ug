@@ -14,6 +14,7 @@ import {
   Sparkles,
   Zap,
   ShieldAlert,
+  Trash2,
 } from 'lucide-react';
 import { BOT_DIFFICULTIES, BotDifficulty } from '../lib/botEngine';
 
@@ -24,6 +25,7 @@ interface OnlineLobbyProps {
   onSendChallenge: (targetUserId: string) => void;
   onCreateCustomGame: (vsBot: boolean, botDifficulty?: BotDifficulty) => void;
   onJoinGameRoom: (roomId: string) => void;
+  onDeleteGameRoom?: (roomId: string) => void;
   onOpenLeaderboard: () => void;
   onOpenSettings: () => void;
 }
@@ -35,6 +37,7 @@ export const OnlineLobby: React.FC<OnlineLobbyProps> = ({
   onSendChallenge,
   onCreateCustomGame,
   onJoinGameRoom,
+  onDeleteGameRoom,
   onOpenLeaderboard,
   onOpenSettings,
 }) => {
@@ -220,20 +223,37 @@ export const OnlineLobby: React.FC<OnlineLobbyProps> = ({
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => onJoinGameRoom(room.id)}
-                    className="w-full py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700 transition flex items-center justify-center gap-1.5"
-                  >
-                    {room.status === 'waiting' && !room.blackPlayer ? (
-                      <>
-                        <Swords className="w-3.5 h-3.5 text-amber-400" /> Join Table
-                      </>
-                    ) : (
-                      <>
-                        <Eye className="w-3.5 h-3.5 text-amber-400" /> Spectate
-                      </>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      onClick={() => onJoinGameRoom(room.id)}
+                      className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700 transition flex items-center justify-center gap-1.5"
+                    >
+                      {room.status === 'waiting' && !room.blackPlayer ? (
+                        <>
+                          <Swords className="w-3.5 h-3.5 text-amber-400" /> Join Table
+                        </>
+                      ) : (
+                        <>
+                          <Eye className="w-3.5 h-3.5 text-amber-400" /> Spectate
+                        </>
+                      )}
+                    </button>
+
+                    {/* Delete Table button if created by current user */}
+                    {(room.redPlayer?.id === currentUser.id || room.blackPlayer?.id === currentUser.id) && onDeleteGameRoom && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteGameRoom(room.id);
+                        }}
+                        className="py-1.5 px-2.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 text-rose-300 hover:text-rose-200 font-bold text-xs border border-rose-800/80 transition flex items-center justify-center gap-1 shrink-0"
+                        title="Delete this Game Table"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Delete Table</span>
+                      </button>
                     )}
-                  </button>
+                  </div>
                 </div>
               ))
             )}

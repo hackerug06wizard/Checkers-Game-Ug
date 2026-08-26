@@ -53,6 +53,49 @@ try {
 }
 export const db = firestoreDb;
 
+// Normalize phone number for consistent uniqueness matching (removes spaces, dashes, parentheses)
+export function normalizePhoneNumber(phone: string): string {
+  if (!phone) return '';
+  return phone.replace(/[\s\-\(\)\.]/g, '').trim();
+}
+
+// Check if a phone number is already registered to another account
+export async function isPhoneNumberTaken(phoneNumber: string, excludeUid?: string): Promise<boolean> {
+  try {
+    const clean = normalizePhoneNumber(phoneNumber);
+    if (!clean || clean.length < 6) return false;
+
+    const usersRef = collection(db, 'users');
+    
+    // 1. Query by normalizedPhone
+    const qNorm = query(usersRef, where('normalizedPhone', '==', clean));
+    const snapNorm = await getDocs(qNorm);
+    if (!snapNorm.empty) {
+      for (const docSnap of snapNorm.docs) {
+        if (!excludeUid || docSnap.id !== excludeUid) {
+          return true;
+        }
+      }
+    }
+
+    // 2. Query by raw phoneNumber as well
+    const qRaw = query(usersRef, where('phoneNumber', '==', phoneNumber.trim()));
+    const snapRaw = await getDocs(qRaw);
+    if (!snapRaw.empty) {
+      for (const docSnap of snapRaw.docs) {
+        if (!excludeUid || docSnap.id !== excludeUid) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  } catch (err) {
+    console.warn('Firestore isPhoneNumberTaken query error:', err);
+    return false;
+  }
+}
+
 // Check if username is already taken by another user in Firestore
 export async function isUsernameTaken(username: string, excludeUid?: string): Promise<boolean> {
   try {
@@ -76,8 +119,15 @@ export async function isUsernameTaken(username: string, excludeUid?: string): Pr
 export async function saveUserProfileToFirestore(profile: UserProfile): Promise<void> {
   try {
     const userRef = doc(db, 'users', profile.id);
+    const cleanPhone = profile.phoneNumber ? profile.phoneNumber.trim() : '';
+    const normPhone = normalizePhoneNumber(cleanPhone);
+    const isGuestUser = Boolean(profile.isGuest || profile.id.startsWith('guest_'));
+
     const dataToSave = {
       ...profile,
+      phoneNumber: cleanPhone,
+      normalizedPhone: normPhone,
+      isGuest: isGuestUser,
       usernameLowercase: (profile.username || '').toLowerCase(),
       isOnline: profile.isOnline ?? true,
       lastActiveTimestamp: Date.now(),
@@ -88,6 +138,47 @@ export async function saveUserProfileToFirestore(profile: UserProfile): Promise<
   } catch (err) {
     console.error('Firestore saveUserProfileToFirestore error:', err);
     throw err;
+  }
+}
+
+// Delete a guest player's data from Firestore immediately
+export async function deleteGuestPlayerFromFirestore(guestId: string): Promise<void> {
+  try {
+    if (!guestId || (!guestId.startsWith('guest_') && !guestId.includes('guest'))) return;
+    const userRef = doc(db, 'users', guestId);
+    await deleteDoc(userRef);
+    console.log(`[Firestore] Guest player ${guestId} data cleared on exit.`);
+  } catch (err) {
+    console.warn('deleteGuestPlayerFromFirestore warning:', err);
+  }
+}
+
+// Clean up all guest player accounts from Firestore database
+export async function cleanUpAllGuestPlayersFromFirestore(): Promise<number> {
+  try {
+    const usersRef = collection(db, 'users');
+    const snap = await getDocs(usersRef);
+    let deletedCount = 0;
+
+    for (const docSnap of snap.docs) {
+      const data = docSnap.data() as UserProfile;
+      const isGuest =
+        data.isGuest ||
+        docSnap.id.startsWith('guest_') ||
+        (data.username && data.username.toLowerCase().startsWith('guest'));
+
+      if (isGuest) {
+        await deleteDoc(docSnap.ref);
+        deletedCount++;
+      }
+    }
+    if (deletedCount > 0) {
+      console.log(`[Firestore] Cleaned up ${deletedCount} guest player records from database.`);
+    }
+    return deletedCount;
+  } catch (err) {
+    console.warn('cleanUpAllGuestPlayersFromFirestore error:', err);
+    return 0;
   }
 }
 
@@ -102,6 +193,8 @@ function createProfileFromFirebaseUser(user: any): UserProfile {
     username: cleanUsername,
     realName: user.displayName || cleanUsername,
     phoneNumber: user.phoneNumber || '',
+    normalizedPhone: normalizePhoneNumber(user.phoneNumber || ''),
+    isGuest: false,
     avatarId: 'avatar-crown',
     termsAccepted: true,
     elo: 1200,
@@ -117,10 +210,15 @@ function createProfileFromFirebaseUser(user: any): UserProfile {
   };
 }
 
-// Google Sign In
+// Google Sign In (Configured with prompt: 'select_account' to show ALL accounts on device)
 export async function signInWithGoogle(rememberMe: boolean = true): Promise<UserProfile> {
   await setAuthRememberMe(rememberMe);
   const provider = new GoogleAuthProvider();
+  // Ensure the account selector is ALWAYS displayed so the user can choose from all device accounts
+  provider.setCustomParameters({
+    prompt: 'select_account',
+  });
+
   const result = await signInWithPopup(auth, provider);
   const user = result.user;
 
@@ -172,12 +270,22 @@ export async function registerInAppUser(params: {
     throw new Error('This username is already taken. Please choose another username.');
   }
 
+  const cleanPhone = params.phoneNumber ? params.phoneNumber.trim() : '';
+  if (cleanPhone) {
+    const phoneTaken = await isPhoneNumberTaken(cleanPhone);
+    if (phoneTaken) {
+      throw new Error('This phone number is already registered with another account. Please use a different phone number.');
+    }
+  }
+
   const userId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
   const newProfile: UserProfile = {
     id: userId,
     username: cleanUsername,
     realName: params.realName.trim(),
-    phoneNumber: params.phoneNumber.trim(),
+    phoneNumber: cleanPhone,
+    normalizedPhone: normalizePhoneNumber(cleanPhone),
+    isGuest: false,
     avatarId: params.avatarId || 'avatar-crown',
     termsAccepted: true,
     wins: 0,
@@ -480,6 +588,16 @@ export async function saveGameRoomToFirestore(room: GameRoom): Promise<void> {
     await setDoc(roomRef, room, { merge: true });
   } catch (e) {
     console.warn('saveGameRoomToFirestore error:', e);
+  }
+}
+
+export async function deleteGameRoomFromFirestore(roomId: string): Promise<void> {
+  try {
+    const roomRef = doc(db, 'rooms', roomId);
+    await deleteDoc(roomRef);
+    console.log(`[Firestore] Game table room ${roomId} deleted.`);
+  } catch (e) {
+    console.warn('deleteGameRoomFromFirestore error:', e);
   }
 }
 

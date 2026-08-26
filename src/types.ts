@@ -45,6 +45,8 @@ export interface UserProfile {
   username: string;
   realName?: string;
   phoneNumber?: string;
+  normalizedPhone?: string;
+  isGuest?: boolean;
   termsAccepted?: boolean;
   avatarId: string;
   wins: number;
