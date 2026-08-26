@@ -3,6 +3,8 @@
 	"appName": "Checkers Arena",
 	"webDir": "dist",
 	"server": {
+		"url": "https://ais-pre-6jl5ztzyfigu5rh4loi7rf-490075589647.europe-west2.run.app",
+		"cleartext": true,
 		"androidScheme": "https"
 	}
 }

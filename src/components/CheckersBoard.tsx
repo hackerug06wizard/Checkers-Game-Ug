@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import { CheckersPiece, MoveOption, PieceColor, Position } from '../types';
 import { Crown, Sparkles } from 'lucide-react';
 import { sounds } from '../lib/sound';
@@ -257,15 +256,12 @@ export const CheckersBoard: React.FC<CheckersBoardProps> = ({
 
                   {/* Captured Piece Target Outline Indicator */}
                   {isCapturedSquare && (
-                    <div className="absolute inset-1 rounded-full border-2 border-dashed border-rose-500 animate-pulse pointer-events-none z-20" />
+                    <div className="absolute inset-1 rounded-full border-2 border-dashed border-rose-500 pointer-events-none z-20" />
                   )}
 
                   {/* Target Move Landing Ring & Dot */}
                   {isTargetSquare && !piece && (
-                    <motion.div
-                      initial={{ scale: 0.5 }}
-                      animate={{ scale: [0.8, 1.1, 0.8] }}
-                      transition={{ repeat: Infinity, duration: 1.5 }}
+                    <div
                       className="w-4 h-4 sm:w-6 sm:h-6 rounded-full border-2 border-white shadow-lg pointer-events-none z-10"
                       style={{
                         backgroundColor: template.targetHex,
@@ -275,57 +271,47 @@ export const CheckersBoard: React.FC<CheckersBoardProps> = ({
                   )}
 
                   {/* Checkers Piece */}
-                  <AnimatePresence mode="popLayout">
-                    {piece && (
-                      <motion.div
-                        key={piece.id}
-                        initial={{ scale: 0.6, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0.2, opacity: 0 }}
-                        transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-                        className={`relative w-[84%] h-[84%] rounded-full flex items-center justify-center cursor-pointer shadow-xl transition-transform ${
-                          isSelected
-                            ? 'scale-110 z-20 ring-4 ring-amber-400'
-                            : hasAvailableMoves && (playerColor === 'spectator' || piece.color === playerColor)
-                            ? 'ring-2 ring-amber-400/90 hover:scale-105'
-                            : 'hover:scale-105'
-                        } ${
+                  {piece && (
+                    <div
+                      key={piece.id}
+                      className={`relative w-[84%] h-[84%] rounded-full flex items-center justify-center cursor-pointer shadow-xl ${
+                        isSelected
+                          ? 'z-20 ring-4 ring-amber-400'
+                          : hasAvailableMoves && (playerColor === 'spectator' || piece.color === playerColor)
+                          ? 'ring-2 ring-amber-400/90'
+                          : ''
+                      } ${
+                        piece.color === 'red'
+                          ? 'bg-gradient-to-tr from-rose-900 via-red-600 to-rose-400 border-2 border-rose-300 shadow-rose-950/80'
+                          : 'bg-gradient-to-tr from-slate-950 via-zinc-900 to-slate-750 border-2 border-slate-400 shadow-black/90'
+                      }`}
+                      style={{
+                        filter: 'drop-shadow(0 3px 4px rgba(0,0,0,0.6))',
+                      }}
+                    >
+                      {/* Inner Circular Piece Groove */}
+                      <div
+                        className={`w-[74%] h-[74%] rounded-full border-2 flex items-center justify-center shadow-inner ${
                           piece.color === 'red'
-                            ? 'bg-gradient-to-tr from-rose-900 via-red-600 to-rose-400 border-2 border-rose-300 shadow-rose-950/80'
-                            : 'bg-gradient-to-tr from-slate-950 via-zinc-900 to-slate-750 border-2 border-slate-400 shadow-black/90'
+                            ? 'border-amber-300/70 bg-red-700/50'
+                            : 'border-slate-400/50 bg-zinc-800/50'
                         }`}
-                        style={{
-                          filter: 'drop-shadow(0 3px 4px rgba(0,0,0,0.6))',
-                        }}
                       >
-                        {/* Inner Circular Piece Groove */}
-                        <div
-                          className={`w-[74%] h-[74%] rounded-full border-2 flex items-center justify-center shadow-inner ${
-                            piece.color === 'red'
-                              ? 'border-amber-300/70 bg-red-700/50'
-                              : 'border-slate-400/50 bg-zinc-800/50'
-                          }`}
-                        >
-                          {/* Crown for King Piece */}
-                          {piece.type === 'king' && (
-                            <motion.div
-                              initial={{ scale: 0, rotate: -30 }}
-                              animate={{ scale: 1, rotate: 0 }}
-                              className="flex items-center justify-center"
-                            >
-                              <Crown
-                                className={`w-4 h-4 sm:w-6 sm:h-6 drop-shadow-lg ${
-                                  piece.color === 'red'
-                                    ? 'text-amber-300'
-                                    : 'text-amber-400'
-                                }`}
-                              />
-                            </motion.div>
-                          )}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                        {/* Crown for King Piece */}
+                        {piece.type === 'king' && (
+                          <div className="flex items-center justify-center">
+                            <Crown
+                              className={`w-4 h-4 sm:w-6 sm:h-6 drop-shadow-lg ${
+                                piece.color === 'red'
+                                  ? 'text-amber-300'
+                                  : 'text-amber-400'
+                              }`}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             });

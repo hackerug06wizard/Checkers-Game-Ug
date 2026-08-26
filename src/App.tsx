@@ -47,7 +47,35 @@ import { getBotMoveForDifficulty, BotDifficulty, BOT_DIFFICULTIES } from './lib/
 import { Swords, X, Check, Bell } from 'lucide-react';
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
+    try {
+      const saved = localStorage.getItem('checkers_user_profile');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      // ignore
+    }
+    const guestId = `guest_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const guestProfile: UserProfile = {
+      id: guestId,
+      username: `Player-${Math.floor(100 + Math.random() * 900)}`,
+      avatarId: 'avatar-crown',
+      rating: 1200,
+      elo: 1200,
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      status: 'online',
+      isOnline: true,
+      isGuest: true,
+      createdAt: Date.now(),
+    };
+    try {
+      localStorage.setItem('checkers_user_profile', JSON.stringify(guestProfile));
+    } catch (e) {
+      // ignore
+    }
+    return guestProfile;
+  });
   const [onlineUsers, setOnlineUsers] = useState<UserProfile[]>([]);
   const [gameRooms, setGameRooms] = useState<GameRoom[]>([]);
   const [activeRoom, setActiveRoom] = useState<GameRoom | null>(null);
@@ -222,10 +250,19 @@ export default function App() {
                 })
               );
             } catch (e) {
-              setIsAuthModalOpen(true);
+              // ignore
             }
-          } else {
-            setIsAuthModalOpen(true);
+          } else if (currentUser) {
+            socket?.send(
+              JSON.stringify({
+                type: 'auth:login',
+                payload: {
+                  username: currentUser.username,
+                  avatarId: currentUser.avatarId,
+                  existingUserId: currentUser.id,
+                },
+              })
+            );
           }
         };
 
@@ -382,16 +419,7 @@ export default function App() {
     });
 
     const unsubscribeGameRooms = subscribeToAllGameRooms((rooms) => {
-      setGameRooms((prev) => {
-        const map = new Map<string, GameRoom>();
-        rooms.forEach((r) => map.set(r.id, r));
-        prev.forEach((r) => {
-          if (!map.has(r.id)) map.set(r.id, r);
-        });
-        return Array.from(map.values()).filter(
-          (r) => r.status === 'waiting' || r.status === 'playing'
-        );
-      });
+      setGameRooms(rooms.filter((r) => r.status === 'waiting' || r.status === 'playing'));
     });
 
     // Refresh saved user profile from Firestore if available
@@ -430,6 +458,10 @@ export default function App() {
     const unsubscribeChallenges = subscribeToIncomingChallenges(
       currentUser.id,
       (challenge) => {
+        if (!challenge) {
+          setIncomingChallenge(null);
+          return;
+        }
         if (challenge && !handledChallengeIdsRef.current.has(challenge.id)) {
           setIncomingChallenge(challenge);
           sounds.playChallenge();
@@ -1072,9 +1104,9 @@ export default function App() {
             onSendGameChat={handleSendGameChat}
             gameChatMessages={gameChatMessages}
           />
-        ) : currentUser ? (
+        ) : (
           <OnlineLobby
-            currentUser={currentUser}
+            currentUser={currentUser || { id: '', username: 'Player', avatarId: 'avatar-crown', wins: 0, losses: 0, draws: 0, rating: 1200, status: 'online', createdAt: Date.now() }}
             onlineUsers={onlineUsers}
             gameRooms={gameRooms}
             onSendChallenge={handleSendChallenge}
@@ -1084,29 +1116,6 @@ export default function App() {
             onOpenLeaderboard={handleOpenLeaderboard}
             onOpenSettings={() => setIsSettingsModalOpen(true)}
           />
-        ) : (
-          <div className="flex items-center justify-center h-full px-4">
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 max-w-md w-full text-center space-y-5 shadow-2xl">
-              <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto" />
-              
-              <div className="space-y-1">
-                <h2 className="text-xl font-black text-white">Checkers Arena</h2>
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  Sign in with your device Google Account to start playing real-time online matches!
-                </p>
-              </div>
-
-              <div className="space-y-2.5 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setIsAuthModalOpen(true)}
-                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 via-amber-400 to-red-500 hover:from-amber-400 hover:to-red-400 text-slate-950 font-black text-sm shadow-xl shadow-amber-950/30 transition transform active:scale-95"
-                >
-                  Sign In with Google
-                </button>
-              </div>
-            </div>
-          </div>
         )}
       </main>
 
