@@ -46,6 +46,93 @@ import {
 import { getBotMoveForDifficulty, BotDifficulty, BOT_DIFFICULTIES } from './lib/botEngine';
 import { Swords, X, Check, Bell } from 'lucide-react';
 
+const DEFAULT_ARENA_PLAYERS: UserProfile[] = [
+  {
+    id: 'usr_arena_1',
+    username: 'KampalaKing',
+    avatarId: 'avatar-crown',
+    rating: 1580,
+    elo: 1580,
+    wins: 48,
+    losses: 12,
+    draws: 4,
+    gamesPlayed: 64,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 30,
+  },
+  {
+    id: 'usr_arena_2',
+    username: 'QueenGambit',
+    avatarId: 'avatar-ruby',
+    rating: 1640,
+    elo: 1640,
+    wins: 72,
+    losses: 18,
+    draws: 6,
+    gamesPlayed: 96,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 45,
+  },
+  {
+    id: 'usr_arena_3',
+    username: 'GrandmasterAlex',
+    avatarId: 'avatar-sapphire',
+    rating: 1720,
+    elo: 1720,
+    wins: 95,
+    losses: 21,
+    draws: 8,
+    gamesPlayed: 124,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 60,
+  },
+  {
+    id: 'usr_arena_4',
+    username: 'CheckersAce',
+    avatarId: 'avatar-knight',
+    rating: 1410,
+    elo: 1410,
+    wins: 34,
+    losses: 19,
+    draws: 3,
+    gamesPlayed: 56,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 20,
+  },
+  {
+    id: 'usr_arena_5',
+    username: 'BlitzTactician',
+    avatarId: 'avatar-cyber',
+    rating: 1490,
+    elo: 1490,
+    wins: 41,
+    losses: 15,
+    draws: 5,
+    gamesPlayed: 61,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 15,
+  },
+  {
+    id: 'usr_arena_6',
+    username: 'SwiftFalcon',
+    avatarId: 'avatar-knight',
+    rating: 1330,
+    elo: 1330,
+    wins: 22,
+    losses: 14,
+    draws: 2,
+    gamesPlayed: 38,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 10,
+  },
+];
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
     try {
@@ -54,37 +141,24 @@ export default function App() {
     } catch (e) {
       // ignore
     }
-    const guestId = `guest_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const guestProfile: UserProfile = {
-      id: guestId,
-      username: `Player-${Math.floor(100 + Math.random() * 900)}`,
-      avatarId: 'avatar-crown',
-      rating: 1200,
-      elo: 1200,
-      wins: 0,
-      losses: 0,
-      draws: 0,
-      status: 'online',
-      isOnline: true,
-      isGuest: true,
-      createdAt: Date.now(),
-    };
-    try {
-      localStorage.setItem('checkers_user_profile', JSON.stringify(guestProfile));
-    } catch (e) {
-      // ignore
-    }
-    return guestProfile;
+    return null;
   });
-  const [onlineUsers, setOnlineUsers] = useState<UserProfile[]>([]);
+  const [onlineUsers, setOnlineUsers] = useState<UserProfile[]>(DEFAULT_ARENA_PLAYERS);
   const [gameRooms, setGameRooms] = useState<GameRoom[]>([]);
   const [activeRoom, setActiveRoom] = useState<GameRoom | null>(null);
   const [incomingChallenge, setIncomingChallenge] = useState<Challenge | null>(null);
   const [gameChatMessages, setGameChatMessages] = useState<ChatMessage[]>([]);
   const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
 
-  // Modals & Preferences
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  // Modals & Preferences - show auth modal on first launch if user is not yet logged in
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('checkers_user_profile');
+      return !saved;
+    } catch (e) {
+      return true;
+    }
+  });
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isLeaderboardModalOpen, setIsLeaderboardModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
@@ -106,12 +180,11 @@ export default function App() {
   const notificationTimerRef = useRef<any>(null);
   const handledChallengeIdsRef = useRef<Set<string>>(new Set());
 
-  // Guest Lifecycle Cleanup: clean up all existing guest players and delete guest data on page close/exit
+  // Guest Lifecycle Cleanup: only clean up on explicit unload or logout
   useEffect(() => {
     // 1. One-time purge of all guest player records in Firestore database
     cleanUpAllGuestPlayersFromFirestore().catch(() => {});
 
-    // 2. Event listeners to immediately remove guest data on game exit
     const handleExit = () => {
       try {
         const saved = localStorage.getItem('checkers_user_profile');
@@ -122,8 +195,7 @@ export default function App() {
             user?.id?.startsWith('guest_') ||
             (user?.username && user?.username.toLowerCase().startsWith('guest'))
           ) {
-            localStorage.removeItem('checkers_user_profile');
-            deleteGuestPlayerFromFirestore(user.id);
+            deleteGuestPlayerFromFirestore(user.id).catch(() => {});
           }
         }
       } catch (e) {
@@ -132,33 +204,8 @@ export default function App() {
     };
 
     window.addEventListener('beforeunload', handleExit);
-    window.addEventListener('unload', handleExit);
-
-    const handleVisibility = () => {
-      if (document.visibilityState === 'hidden') {
-        try {
-          const saved = localStorage.getItem('checkers_user_profile');
-          if (saved) {
-            const user = JSON.parse(saved);
-            if (
-              user?.isGuest ||
-              user?.id?.startsWith('guest_') ||
-              (user?.username && user?.username.toLowerCase().startsWith('guest'))
-            ) {
-              deleteGuestPlayerFromFirestore(user.id);
-            }
-          }
-        } catch (e) {
-          // ignore
-        }
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-
     return () => {
       window.removeEventListener('beforeunload', handleExit);
-      window.removeEventListener('unload', handleExit);
-      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 
@@ -318,7 +365,15 @@ export default function App() {
               }
 
               case 'presence:list': {
-                setOnlineUsers(payload);
+                setOnlineUsers((prev) => {
+                  const map = new Map<string, UserProfile>();
+                  DEFAULT_ARENA_PLAYERS.forEach((u) => map.set(u.id, u));
+                  prev.forEach((u) => map.set(u.id, u));
+                  if (Array.isArray(payload)) {
+                    payload.forEach((u: UserProfile) => map.set(u.id, u));
+                  }
+                  return Array.from(map.values());
+                });
                 break;
               }
 
@@ -406,10 +461,9 @@ export default function App() {
     const unsubscribePresence = subscribeToOnlineUsers((firestoreUsers) => {
       setOnlineUsers((prev) => {
         const map = new Map<string, UserProfile>();
+        DEFAULT_ARENA_PLAYERS.forEach((u) => map.set(u.id, u));
+        prev.forEach((u) => map.set(u.id, u));
         firestoreUsers.forEach((u) => map.set(u.id, u));
-        prev.forEach((u) => {
-          if (!map.has(u.id)) map.set(u.id, u);
-        });
         return Array.from(map.values());
       });
     });
@@ -520,6 +574,34 @@ export default function App() {
       }
     }
     showNotification(`Welcome to Checkers Arena, ${userProfile.username}!`, 'info', 6000);
+  };
+
+  const handleAuthModalClose = () => {
+    setIsAuthModalOpen(false);
+    if (!currentUser) {
+      const guestId = `guest_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const guestProfile: UserProfile = {
+        id: guestId,
+        username: `Guest-${Math.floor(100 + Math.random() * 900)}`,
+        avatarId: 'avatar-crown',
+        rating: 1200,
+        elo: 1200,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        status: 'online',
+        isOnline: true,
+        isGuest: true,
+        createdAt: Date.now(),
+      };
+      setCurrentUser(guestProfile);
+      localStorage.setItem('checkers_user_profile', JSON.stringify(guestProfile));
+      sendWs('auth:login', {
+        username: guestProfile.username,
+        avatarId: guestProfile.avatarId,
+        existingUserId: guestProfile.id,
+      });
+    }
   };
 
   const handleSendChallenge = async (targetUserId: string) => {
@@ -1085,8 +1167,15 @@ export default function App() {
       {/* Header Bar */}
       <Header
         currentUser={currentUser}
+        onlineCount={Math.max(1, onlineUsers.length + (currentUser && !onlineUsers.some((u) => u.id === currentUser.id) ? 1 : 0))}
         onOpenLeaderboard={handleOpenLeaderboard}
-        onOpenProfile={() => setIsProfileModalOpen(true)}
+        onOpenProfile={() => {
+          if (currentUser) {
+            setIsProfileModalOpen(true);
+          } else {
+            setIsAuthModalOpen(true);
+          }
+        }}
         onOpenAuth={() => setIsAuthModalOpen(true)}
       />
 
@@ -1122,9 +1211,10 @@ export default function App() {
       {/* Bottom Sheet Auth Panel */}
       <BottomAuthSheet
         isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
+        onClose={handleAuthModalClose}
         onLoginSuccess={handleAuthSuccess}
         defaultEmail="hackerug06@gmail.com"
+        allowDismiss={true}
       />
 
       {/* Settings Modal (Theme, Audio, Logout, Account Deletion Confirmation) */}

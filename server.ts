@@ -46,6 +46,94 @@ let activeRooms = new Map<string, GameRoom>(); // roomId -> GameRoom
 let activeChallenges = new Map<string, Challenge>(); // challengeId -> Challenge
 let globalChatMessages: ChatMessage[] = [];
 
+// Default Arena Players pool to ensure the lobby always has active online players
+const DEFAULT_ARENA_PLAYERS: UserProfile[] = [
+  {
+    id: 'usr_arena_1',
+    username: 'KampalaKing',
+    avatarId: 'avatar-crown',
+    rating: 1580,
+    elo: 1580,
+    wins: 48,
+    losses: 12,
+    draws: 4,
+    gamesPlayed: 64,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 30,
+  },
+  {
+    id: 'usr_arena_2',
+    username: 'QueenGambit',
+    avatarId: 'avatar-ruby',
+    rating: 1640,
+    elo: 1640,
+    wins: 72,
+    losses: 18,
+    draws: 6,
+    gamesPlayed: 96,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 45,
+  },
+  {
+    id: 'usr_arena_3',
+    username: 'GrandmasterAlex',
+    avatarId: 'avatar-sapphire',
+    rating: 1720,
+    elo: 1720,
+    wins: 95,
+    losses: 21,
+    draws: 8,
+    gamesPlayed: 124,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 60,
+  },
+  {
+    id: 'usr_arena_4',
+    username: 'CheckersAce',
+    avatarId: 'avatar-knight',
+    rating: 1410,
+    elo: 1410,
+    wins: 34,
+    losses: 19,
+    draws: 3,
+    gamesPlayed: 56,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 20,
+  },
+  {
+    id: 'usr_arena_5',
+    username: 'BlitzTactician',
+    avatarId: 'avatar-cyber',
+    rating: 1490,
+    elo: 1490,
+    wins: 41,
+    losses: 15,
+    draws: 5,
+    gamesPlayed: 61,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 15,
+  },
+  {
+    id: 'usr_arena_6',
+    username: 'SwiftFalcon',
+    avatarId: 'avatar-knight',
+    rating: 1330,
+    elo: 1330,
+    wins: 22,
+    losses: 14,
+    draws: 2,
+    gamesPlayed: 38,
+    status: 'online',
+    isOnline: true,
+    createdAt: Date.now() - 86400000 * 10,
+  },
+];
+
 // Load persisted users on startup
 try {
   if (fs.existsSync(USERS_FILE)) {
@@ -60,6 +148,13 @@ try {
 } catch (err) {
   console.error('Failed to load users file:', err);
 }
+
+// Seed default arena players if users count is low
+DEFAULT_ARENA_PLAYERS.forEach((ap) => {
+  if (!usersMap.has(ap.id)) {
+    usersMap.set(ap.id, ap);
+  }
+});
 
 function persistUsers() {
   try {
