@@ -290,7 +290,9 @@ try {
     const rawUsers = JSON.parse(import_fs.default.readFileSync(USERS_FILE, "utf-8"));
     if (Array.isArray(rawUsers)) {
       rawUsers.forEach((u) => {
-        usersMap.set(u.id, { ...u, status: "online" });
+        if (!u.id.startsWith("usr_arena_")) {
+          usersMap.set(u.id, { ...u, status: "offline", isOnline: false });
+        }
       });
       console.log(`Loaded ${usersMap.size} persisted user accounts.`);
     }
@@ -300,10 +302,9 @@ try {
 }
 function persistUsers() {
   try {
-    const usersArray = Array.from(usersMap.values()).map((u) => ({
+    const usersArray = Array.from(usersMap.values()).filter((u) => !u.id.startsWith("usr_arena_")).map((u) => ({
       ...u,
-      status: "online"
-      // reset status for storage
+      status: userSockets.has(u.id) ? "online" : "offline"
     }));
     import_fs.default.writeFileSync(USERS_FILE, JSON.stringify(usersArray, null, 2), "utf-8");
   } catch (err) {
@@ -358,16 +359,26 @@ function sendToUser(userId, type, payload) {
   }
 }
 function broadcastPresence() {
-  const onlineUsers = Array.from(usersMap.values()).map((u) => ({
-    id: u.id,
-    username: u.username,
-    avatarId: u.avatarId,
-    rating: u.rating,
-    status: u.status,
-    wins: u.wins,
-    losses: u.losses,
-    draws: u.draws
-  }));
+  const onlineUsers = [];
+  userSockets.forEach((ws, userId) => {
+    if (ws.readyState === import_ws.WebSocket.OPEN) {
+      const u = usersMap.get(userId);
+      if (u) {
+        onlineUsers.push({
+          id: u.id,
+          username: u.username,
+          avatarId: u.avatarId,
+          rating: u.rating || u.elo || 1200,
+          elo: u.elo || u.rating || 1200,
+          status: u.status || "online",
+          isOnline: true,
+          wins: u.wins || 0,
+          losses: u.losses || 0,
+          draws: u.draws || 0
+        });
+      }
+    }
+  });
   broadcast("presence:list", onlineUsers);
 }
 function calculateElo(winnerRating, loserRating, isDraw = false) {

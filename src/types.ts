@@ -55,7 +55,7 @@ export interface UserProfile {
   gamesPlayed?: number;
   rating: number; // Elo rating, default 1200
   elo?: number;
-  status: 'online' | 'in-game' | 'away';
+  status: 'online' | 'in-game' | 'away' | 'offline';
   isOnline?: boolean;
   lastActiveTimestamp?: number;
   createdAt: number;

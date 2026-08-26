@@ -36,6 +36,7 @@ import {
   deleteGameRoomFromFirestore,
   deleteGuestPlayerFromFirestore,
   cleanUpAllGuestPlayersFromFirestore,
+  setUserOfflineInFirestore,
 } from './lib/firebase';
 import {
   createInitialBoard,
@@ -45,93 +46,6 @@ import {
 } from './lib/checkersEngine';
 import { getBotMoveForDifficulty, BotDifficulty, BOT_DIFFICULTIES } from './lib/botEngine';
 import { Swords, X, Check, Bell } from 'lucide-react';
-
-const DEFAULT_ARENA_PLAYERS: UserProfile[] = [
-  {
-    id: 'usr_arena_1',
-    username: 'KampalaKing',
-    avatarId: 'avatar-crown',
-    rating: 1580,
-    elo: 1580,
-    wins: 48,
-    losses: 12,
-    draws: 4,
-    gamesPlayed: 64,
-    status: 'online',
-    isOnline: true,
-    createdAt: Date.now() - 86400000 * 30,
-  },
-  {
-    id: 'usr_arena_2',
-    username: 'QueenGambit',
-    avatarId: 'avatar-ruby',
-    rating: 1640,
-    elo: 1640,
-    wins: 72,
-    losses: 18,
-    draws: 6,
-    gamesPlayed: 96,
-    status: 'online',
-    isOnline: true,
-    createdAt: Date.now() - 86400000 * 45,
-  },
-  {
-    id: 'usr_arena_3',
-    username: 'GrandmasterAlex',
-    avatarId: 'avatar-sapphire',
-    rating: 1720,
-    elo: 1720,
-    wins: 95,
-    losses: 21,
-    draws: 8,
-    gamesPlayed: 124,
-    status: 'online',
-    isOnline: true,
-    createdAt: Date.now() - 86400000 * 60,
-  },
-  {
-    id: 'usr_arena_4',
-    username: 'CheckersAce',
-    avatarId: 'avatar-knight',
-    rating: 1410,
-    elo: 1410,
-    wins: 34,
-    losses: 19,
-    draws: 3,
-    gamesPlayed: 56,
-    status: 'online',
-    isOnline: true,
-    createdAt: Date.now() - 86400000 * 20,
-  },
-  {
-    id: 'usr_arena_5',
-    username: 'BlitzTactician',
-    avatarId: 'avatar-cyber',
-    rating: 1490,
-    elo: 1490,
-    wins: 41,
-    losses: 15,
-    draws: 5,
-    gamesPlayed: 61,
-    status: 'online',
-    isOnline: true,
-    createdAt: Date.now() - 86400000 * 15,
-  },
-  {
-    id: 'usr_arena_6',
-    username: 'SwiftFalcon',
-    avatarId: 'avatar-knight',
-    rating: 1330,
-    elo: 1330,
-    wins: 22,
-    losses: 14,
-    draws: 2,
-    gamesPlayed: 38,
-    status: 'online',
-    isOnline: true,
-    createdAt: Date.now() - 86400000 * 10,
-  },
-];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
@@ -143,7 +57,7 @@ export default function App() {
     }
     return null;
   });
-  const [onlineUsers, setOnlineUsers] = useState<UserProfile[]>(DEFAULT_ARENA_PLAYERS);
+  const [onlineUsers, setOnlineUsers] = useState<UserProfile[]>([]);
   const [gameRooms, setGameRooms] = useState<GameRoom[]>([]);
   const [activeRoom, setActiveRoom] = useState<GameRoom | null>(null);
   const [incomingChallenge, setIncomingChallenge] = useState<Challenge | null>(null);
@@ -190,12 +104,15 @@ export default function App() {
         const saved = localStorage.getItem('checkers_user_profile');
         if (saved) {
           const user = JSON.parse(saved);
-          if (
-            user?.isGuest ||
-            user?.id?.startsWith('guest_') ||
-            (user?.username && user?.username.toLowerCase().startsWith('guest'))
-          ) {
-            deleteGuestPlayerFromFirestore(user.id).catch(() => {});
+          if (user?.id) {
+            setUserOfflineInFirestore(user.id).catch(() => {});
+            if (
+              user?.isGuest ||
+              user?.id?.startsWith('guest_') ||
+              (user?.username && user?.username.toLowerCase().startsWith('guest'))
+            ) {
+              deleteGuestPlayerFromFirestore(user.id).catch(() => {});
+            }
           }
         }
       } catch (e) {
@@ -365,15 +282,9 @@ export default function App() {
               }
 
               case 'presence:list': {
-                setOnlineUsers((prev) => {
-                  const map = new Map<string, UserProfile>();
-                  DEFAULT_ARENA_PLAYERS.forEach((u) => map.set(u.id, u));
-                  prev.forEach((u) => map.set(u.id, u));
-                  if (Array.isArray(payload)) {
-                    payload.forEach((u: UserProfile) => map.set(u.id, u));
-                  }
-                  return Array.from(map.values());
-                });
+                if (Array.isArray(payload)) {
+                  setOnlineUsers(payload.filter((u: UserProfile) => !u.id.startsWith('usr_arena_')));
+                }
                 break;
               }
 
@@ -461,9 +372,18 @@ export default function App() {
     const unsubscribePresence = subscribeToOnlineUsers((firestoreUsers) => {
       setOnlineUsers((prev) => {
         const map = new Map<string, UserProfile>();
-        DEFAULT_ARENA_PLAYERS.forEach((u) => map.set(u.id, u));
-        prev.forEach((u) => map.set(u.id, u));
-        firestoreUsers.forEach((u) => map.set(u.id, u));
+        // Add firestore online users
+        firestoreUsers.forEach((u) => {
+          if (!u.id.startsWith('usr_arena_')) {
+            map.set(u.id, u);
+          }
+        });
+        // Also keep currently connected WS users
+        prev.forEach((u) => {
+          if (!u.id.startsWith('usr_arena_') && !map.has(u.id)) {
+            map.set(u.id, u);
+          }
+        });
         return Array.from(map.values());
       });
     });
@@ -1085,6 +1005,9 @@ export default function App() {
 
   const handleLogout = async () => {
     setIsSettingsModalOpen(false);
+    if (currentUser?.id) {
+      setUserOfflineInFirestore(currentUser.id).catch(() => {});
+    }
     await logOutUser();
     setCurrentUser(null);
     setIsAuthModalOpen(true);
@@ -1167,7 +1090,7 @@ export default function App() {
       {/* Header Bar */}
       <Header
         currentUser={currentUser}
-        onlineCount={Math.max(1, onlineUsers.length + (currentUser && !onlineUsers.some((u) => u.id === currentUser.id) ? 1 : 0))}
+        onlineCount={Math.max(1, onlineUsers.filter((u) => u.id !== currentUser?.id).length + (currentUser ? 1 : 0))}
         onOpenLeaderboard={handleOpenLeaderboard}
         onOpenProfile={() => {
           if (currentUser) {

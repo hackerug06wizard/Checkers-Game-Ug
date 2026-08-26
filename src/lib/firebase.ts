@@ -412,7 +412,7 @@ export async function setAuthRememberMe(remember: boolean): Promise<void> {
   }
 }
 
-// Subscribe to Realtime Online Users in Firestore
+// Subscribe to Realtime Online Users in Firestore (Real-Time Only)
 export function subscribeToOnlineUsers(callback: (users: UserProfile[]) => void) {
   try {
     const usersRef = collection(db, 'users');
@@ -422,9 +422,10 @@ export function subscribeToOnlineUsers(callback: (users: UserProfile[]) => void)
       const now = Date.now();
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as UserProfile;
-        if (data && data.username) {
-          const isRecentlyActive = !data.lastActiveTimestamp || (now - data.lastActiveTimestamp < 300000);
-          if (data.isOnline !== false && isRecentlyActive) {
+        if (data && data.id && data.username) {
+          // Strictly check real-time active heartbeat (within past 60s) and isOnline flag
+          const isRecentlyActive = !!data.lastActiveTimestamp && (now - data.lastActiveTimestamp < 60000);
+          if (data.isOnline === true && isRecentlyActive) {
             active.push(data);
           }
         }
@@ -449,6 +450,19 @@ export async function updatePresenceHeartbeat(userId: string): Promise<void> {
     });
   } catch (e) {
     // If document doesn't exist or offline, ignore heartbeat error
+  }
+}
+
+// Mark user offline in Firestore
+export async function setUserOfflineInFirestore(userId: string): Promise<void> {
+  try {
+    const userRef = doc(db, 'users', userId);
+    await updateDoc(userRef, {
+      isOnline: false,
+      lastActiveTimestamp: Date.now(),
+    });
+  } catch (e) {
+    // ignore
   }
 }
 

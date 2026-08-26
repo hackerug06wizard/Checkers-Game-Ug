@@ -119,11 +119,38 @@ export const OnlineLobby: React.FC<OnlineLobbyProps> = ({
           {/* Online Users List */}
           <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 py-2 min-h-0 pr-1">
             {otherOnlinePlayers.length === 0 ? (
-              <div className="py-8 text-center space-y-2 flex flex-col items-center justify-center h-full">
-                <Users className="w-8 h-8 text-slate-600" />
-                <p className="text-slate-400 text-xs font-medium">
-                  No other players are currently online in the arena.
-                </p>
+              <div className="py-6 px-3 text-center space-y-3 flex flex-col items-center justify-center h-full">
+                <div className="relative flex items-center justify-center">
+                  <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
+                    <Users className="w-6 h-6 text-amber-400" />
+                  </div>
+                  <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500"></span>
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-slate-200 text-xs font-bold">
+                    No other players online right now
+                  </p>
+                  <p className="text-slate-400 text-[11px] max-w-xs leading-relaxed">
+                    You're live in the arena! Create a table or practice against the Bot while waiting for players.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    onClick={() => setShowBotModal(true)}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 text-xs font-bold border border-slate-700 transition"
+                  >
+                    Practice vs Bot
+                  </button>
+                  <button
+                    onClick={() => onCreateCustomGame(false)}
+                    className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-red-600 text-slate-950 text-xs font-bold transition shadow"
+                  >
+                    Host Table
+                  </button>
+                </div>
               </div>
             ) : (
               otherOnlinePlayers.map((player) => (
