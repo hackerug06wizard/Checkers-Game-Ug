@@ -85,10 +85,13 @@ export const AndroidInstallModal: React.FC<AndroidInstallModalProps> = ({
         </button>
 
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 to-red-600 p-0.5 shadow-lg shadow-amber-950/40">
-            <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
-              <Smartphone className="w-8 h-8 text-amber-400" />
-            </div>
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-amber-500 to-rose-600 p-0.5 shadow-xl shadow-amber-950/40 shrink-0">
+            <img
+              src="/app-icon.png"
+              alt="Checkers Arena App Icon"
+              referrerPolicy="no-referrer"
+              className="w-full h-full object-cover rounded-[14px] shadow-inner"
+            />
           </div>
           <div>
             <h2 className="text-xl font-black text-white">

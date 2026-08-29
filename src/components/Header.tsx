@@ -2,7 +2,7 @@ import React from 'react';
 import { UserProfile } from '../types';
 import { AvatarBadge } from './AvatarBadge';
 import { AppLogo } from './AppLogo';
-import { Trophy, LogIn, Users, UserPlus } from 'lucide-react';
+import { Trophy, LogIn, Users, UserPlus, Wallet, Plus } from 'lucide-react';
 
 interface HeaderProps {
   currentUser: UserProfile | null;
@@ -10,6 +10,7 @@ interface HeaderProps {
   onOpenLeaderboard: () => void;
   onOpenProfile: () => void;
   onOpenAuth: () => void;
+  onOpenWallet?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -18,6 +19,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenLeaderboard,
   onOpenProfile,
   onOpenAuth,
+  onOpenWallet,
 }) => {
   return (
     <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-md border-b border-slate-800/90 px-3 sm:px-6 py-2.5 shadow-xl select-none">
@@ -37,8 +39,28 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Action Controls: Leaderboard & User Profile / Sign In */}
+        {/* Action Controls: Leaderboard, Wallet & User Profile / Sign In */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {/* Wallet Balance & Deposit Quick Pill */}
+          {currentUser && onOpenWallet && (
+            <button
+              onClick={onOpenWallet}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl bg-gradient-to-r from-amber-950/80 to-slate-900 border border-amber-500/40 hover:border-amber-400 text-amber-300 transition shadow-md active:scale-95 cursor-pointer group"
+              title="Pesapal Wallet & Deposits"
+            >
+              <Wallet className="w-4 h-4 text-amber-400 group-hover:scale-110 transition shrink-0" />
+              <div className="flex items-center gap-1">
+                <span className="text-xs font-black text-white">
+                  {(currentUser.walletBalance || 0).toLocaleString()}
+                </span>
+                <span className="text-[10px] text-amber-400 font-bold">UGX</span>
+              </div>
+              <div className="w-4 h-4 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center font-black text-[10px] ml-0.5 shrink-0">
+                <Plus className="w-3 h-3 stroke-[3]" />
+              </div>
+            </button>
+          )}
+
           {/* Global Checkers Leaderboard */}
           <button
             onClick={onOpenLeaderboard}
@@ -92,3 +114,4 @@ export const Header: React.FC<HeaderProps> = ({
     </header>
   );
 };
+

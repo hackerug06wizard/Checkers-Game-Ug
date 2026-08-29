@@ -16,6 +16,9 @@ import { OnlineLobby } from './components/OnlineLobby';
 import { GameRoom as GameRoomComponent } from './components/GameRoom';
 import { LeaderboardModal } from './components/LeaderboardModal';
 import { ProfileModal } from './components/ProfileModal';
+import { WalletModal } from './components/WalletModal';
+import { CreateTableModal } from './components/CreateTableModal';
+import { ChallengeModal } from './components/ChallengeModal';
 import { AvatarBadge } from './components/AvatarBadge';
 import { sounds } from './lib/sound';
 import {
@@ -79,6 +82,10 @@ export default function App() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isLeaderboardModalOpen, setIsLeaderboardModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
+  const [isCreateTableModalOpen, setIsCreateTableModalOpen] = useState(false);
+  const [isChallengeModalOpen, setIsChallengeModalOpen] = useState(false);
+  const [challengeTargetPlayer, setChallengeTargetPlayer] = useState<UserProfile | null>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     return localStorage.getItem('checkers_sound_enabled') !== 'false';
   });
@@ -286,6 +293,21 @@ export default function App() {
                   JSON.stringify(payload.user)
                 );
                 showNotification('Profile updated successfully!');
+                break;
+              }
+
+              case 'wallet:balance_updated': {
+                setCurrentUser((prev) => {
+                  if (!prev) return prev;
+                  const updated = {
+                    ...prev,
+                    walletBalance: payload.walletBalance,
+                    totalWon: typeof payload.totalWon === 'number' ? payload.totalWon : prev.totalWon,
+                    totalStaked: typeof payload.totalStaked === 'number' ? payload.totalStaked : prev.totalStaked,
+                  };
+                  localStorage.setItem('checkers_user_profile', JSON.stringify(updated));
+                  return updated;
+                });
                 break;
               }
 
@@ -593,11 +615,19 @@ export default function App() {
     }
   };
 
-  const handleSendChallenge = async (targetUserId: string) => {
+  const handleSendChallenge = async (targetUserId: string, stakeAmount: number = 0) => {
     const targetUser = onlineUsers.find((u) => u.id === targetUserId);
+    const currentBalance = currentUser?.walletBalance || 0;
+
+    if (stakeAmount > 0 && currentBalance < stakeAmount) {
+      showNotification(`Insufficient balance for ${stakeAmount.toLocaleString()} UGX stake. Please deposit funds.`, 'error');
+      setIsWalletModalOpen(true);
+      return;
+    }
+
     const challengeId = `ch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     sounds.playChallenge();
-    sendWs('challenge:send', { targetUserId, targetUser, challengeId });
+    sendWs('challenge:send', { targetUserId, targetUser, challengeId, stakeAmount });
     if (currentUser && targetUser) {
       try {
         const cId = await sendChallengeToFirestore(currentUser, targetUser, challengeId);
@@ -634,7 +664,7 @@ export default function App() {
       }
     }
     showNotification(
-      `Challenge sent to ${targetUser?.username || 'player'}! Waiting for response...`,
+      `Challenge sent to ${targetUser?.username || 'player'}${stakeAmount > 0 ? ` with ${stakeAmount.toLocaleString()} UGX stake` : ''}! Waiting for response...`,
       'info',
       6000
     );
@@ -645,6 +675,20 @@ export default function App() {
     const challenge = incomingChallenge;
     handledChallengeIdsRef.current.add(challenge.id);
     setIncomingChallenge(null);
+
+    const stakeAmount = challenge.stakeAmount || 0;
+    const currentBalance = currentUser?.walletBalance || 0;
+
+    if (accept && stakeAmount > 0 && currentBalance < stakeAmount) {
+      showNotification(`You need ${stakeAmount.toLocaleString()} UGX to accept this challenge.`, 'error');
+      setIsWalletModalOpen(true);
+      sendWs('challenge:respond', {
+        challengeId: challenge.id,
+        accept: false,
+        reason: 'Insufficient wallet balance',
+      });
+      return;
+    }
 
     const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
@@ -678,6 +722,8 @@ export default function App() {
         id: roomId,
         name: `${redPlayer.username} vs ${blackPlayer.username}`,
         status: 'playing',
+        stakeAmount,
+        potAmount: stakeAmount * 2,
         redPlayer,
         blackPlayer,
         currentTurn: 'red',
@@ -706,6 +752,7 @@ export default function App() {
       challengeId: challenge.id,
       accept,
       roomId,
+      stakeAmount,
       fromUser: challenge.fromUser,
       toUser: currentUser || challenge.toUser,
     });
@@ -856,7 +903,13 @@ export default function App() {
     }, 550);
   };
 
-  const handleCreateCustomGame = (vsBot: boolean, botDifficulty: BotDifficulty = 'medium') => {
+  const handleCreateCustomGame = (
+    vsBot: boolean,
+    botDifficulty: BotDifficulty = 'medium',
+    tableName?: string,
+    stakeAmount: number = 0,
+    timeLimitSeconds: number = 900
+  ) => {
     const player = currentUser || {
       id: 'guest_' + Math.random().toString(36).substring(2, 9),
       username: 'GuestPlayer',
@@ -878,9 +931,11 @@ export default function App() {
       const diffConfig = BOT_DIFFICULTIES[botDifficulty] || BOT_DIFFICULTIES.medium;
       const botRoom: GameRoom = {
         id: `room_bot_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        name: `${player.username} vs Bot (${diffConfig.name})`,
+        name: tableName || `${player.username} vs Bot (${diffConfig.name})`,
         status: 'playing',
         botDifficulty,
+        stakeAmount: 0,
+        potAmount: 0,
         redPlayer: {
           id: player.id,
           username: player.username,
@@ -905,8 +960,8 @@ export default function App() {
         winner: null,
         createdAt: Date.now(),
         lastMoveTimestamp: Date.now(),
-        turnTimeLimitSeconds: 900,
-        turnDeadline: Date.now() + 900000,
+        turnTimeLimitSeconds: timeLimitSeconds,
+        turnDeadline: Date.now() + timeLimitSeconds * 1000,
         spectatorsCount: 0,
       };
 
@@ -917,11 +972,20 @@ export default function App() {
       // Send to server if connected
       sendWs('game:create_custom', { vsBot: true, botDifficulty });
     } else {
+      const currentBalance = currentUser?.walletBalance || 0;
+      if (stakeAmount > 0 && currentBalance < stakeAmount) {
+        showNotification(`Insufficient balance for ${stakeAmount.toLocaleString()} UGX stake. Please deposit funds.`, 'error');
+        setIsWalletModalOpen(true);
+        return;
+      }
+
       const initialBoard = createInitialBoard();
       const customRoom: GameRoom = {
         id: `room_table_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        name: `${player.username}'s Game Table`,
+        name: tableName || `${player.username}'s Game Table`,
         status: 'waiting',
+        stakeAmount,
+        potAmount: stakeAmount * 2,
         redPlayer: {
           id: player.id,
           username: player.username,
@@ -938,14 +1002,19 @@ export default function App() {
         winner: null,
         createdAt: Date.now(),
         lastMoveTimestamp: Date.now(),
-        turnTimeLimitSeconds: 900,
-        turnDeadline: Date.now() + 900000,
+        turnTimeLimitSeconds: timeLimitSeconds,
+        turnDeadline: Date.now() + timeLimitSeconds * 1000,
         spectatorsCount: 0,
       };
 
       setActiveRoom(customRoom);
       setGameRooms((prev) => [customRoom, ...prev.filter((r) => r.id !== customRoom.id)]);
-      showNotification('Game Table created! Waiting for an opponent to join...', 'info');
+      showNotification(
+        stakeAmount > 0
+          ? `Game Table created with ${stakeAmount.toLocaleString()} UGX Stake! Waiting for challenger...`
+          : 'Game Table created! Waiting for an opponent to join...',
+        'info'
+      );
 
       // Save to Firestore so it appears in active game tables immediately for everyone
       saveGameRoomToFirestore(customRoom).catch((e) => console.warn('saveGameRoomToFirestore error:', e));
@@ -958,7 +1027,13 @@ export default function App() {
       });
 
       // Send to server if connected
-      sendWs('game:create_custom', { vsBot: false, roomId: customRoom.id, name: customRoom.name });
+      sendWs('game:create_custom', {
+        vsBot: false,
+        roomId: customRoom.id,
+        name: customRoom.name,
+        stakeAmount,
+        timeLimitSeconds,
+      });
     }
   };
 
@@ -966,6 +1041,17 @@ export default function App() {
     if (!currentUser) {
       setIsAuthModalOpen(true);
       return;
+    }
+
+    const roomToJoin = gameRooms.find((r) => r.id === roomId);
+    if (roomToJoin && (roomToJoin.stakeAmount || 0) > 0) {
+      const requiredStake = roomToJoin.stakeAmount || 0;
+      const currentBalance = currentUser.walletBalance || 0;
+      if (currentBalance < requiredStake) {
+        showNotification(`You need at least ${requiredStake.toLocaleString()} UGX to join this staked table.`, 'error');
+        setIsWalletModalOpen(true);
+        return;
+      }
     }
 
     sendWs('game:join', { roomId });
@@ -977,7 +1063,6 @@ export default function App() {
       }
     });
 
-    const roomToJoin = gameRooms.find((r) => r.id === roomId);
     if (roomToJoin && roomToJoin.status === 'waiting' && !roomToJoin.blackPlayer) {
       const updatedRoom: GameRoom = {
         ...roomToJoin,
@@ -1235,6 +1320,7 @@ export default function App() {
           }
         }}
         onOpenAuth={() => setIsAuthModalOpen(true)}
+        onOpenWallet={() => setIsWalletModalOpen(true)}
       />
 
       {/* Main Container View (Static, no scrolling) */}
@@ -1256,12 +1342,17 @@ export default function App() {
             currentUser={currentUser || { id: '', username: 'Player', avatarId: 'avatar-crown', wins: 0, losses: 0, draws: 0, rating: 1200, status: 'online', createdAt: Date.now() }}
             onlineUsers={onlineUsers}
             gameRooms={gameRooms}
-            onSendChallenge={handleSendChallenge}
+            onInitiateChallenge={(targetUser) => {
+              setChallengeTargetPlayer(targetUser);
+              setIsChallengeModalOpen(true);
+            }}
             onCreateCustomGame={handleCreateCustomGame}
+            onOpenCreateTableModal={() => setIsCreateTableModalOpen(true)}
             onJoinGameRoom={handleJoinGameRoom}
             onDeleteGameRoom={handleDeleteGameRoom}
             onOpenLeaderboard={handleOpenLeaderboard}
             onOpenSettings={() => setIsSettingsModalOpen(true)}
+            onOpenWallet={() => setIsWalletModalOpen(true)}
           />
         )}
       </main>
@@ -1302,6 +1393,59 @@ export default function App() {
         entries={leaderboardEntries}
       />
 
+      {/* Pesapal Real Payments & Wallet Modal */}
+      {currentUser && (
+        <WalletModal
+          currentUser={currentUser}
+          isOpen={isWalletModalOpen}
+          onClose={() => setIsWalletModalOpen(false)}
+          onBalanceUpdated={(newBalance) => {
+            setCurrentUser((prev) => {
+              if (!prev) return prev;
+              const updated = { ...prev, walletBalance: newBalance };
+              localStorage.setItem('checkers_user_profile', JSON.stringify(updated));
+              return updated;
+            });
+          }}
+        />
+      )}
+
+      {/* Custom Staked Game Table Creation Modal */}
+      {currentUser && (
+        <CreateTableModal
+          currentUser={currentUser}
+          isOpen={isCreateTableModalOpen}
+          onClose={() => setIsCreateTableModalOpen(false)}
+          onCreateTable={(tableName, stakeAmount, timeLimitSeconds) => {
+            handleCreateCustomGame(false, 'medium', tableName, stakeAmount, timeLimitSeconds);
+          }}
+          onOpenWallet={() => {
+            setIsCreateTableModalOpen(false);
+            setIsWalletModalOpen(true);
+          }}
+        />
+      )}
+
+      {/* Player Direct Challenge with Stakes Modal */}
+      {currentUser && (
+        <ChallengeModal
+          currentUser={currentUser}
+          targetPlayer={challengeTargetPlayer}
+          isOpen={isChallengeModalOpen}
+          onClose={() => {
+            setIsChallengeModalOpen(false);
+            setChallengeTargetPlayer(null);
+          }}
+          onSendChallenge={(targetUserId, stakeAmount) => {
+            handleSendChallenge(targetUserId, stakeAmount);
+          }}
+          onOpenWallet={() => {
+            setIsChallengeModalOpen(false);
+            setIsWalletModalOpen(true);
+          }}
+        />
+      )}
+
       {/* Incoming Match Challenge Dialog Overlay */}
       {incomingChallenge && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in">
@@ -1326,8 +1470,32 @@ export default function App() {
               </div>
               <h3 className="text-lg font-black text-white">Incoming Match Challenge!</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                <strong className="text-amber-400">{incomingChallenge.fromUser.username}</strong> ({incomingChallenge.fromUser.rating || incomingChallenge.fromUser.elo || 1200} ELO) challenged you to a 15-minute Checkers match.
+                <strong className="text-amber-400">{incomingChallenge.fromUser.username}</strong> ({incomingChallenge.fromUser.rating || incomingChallenge.fromUser.elo || 1200} ELO) challenged you to a Checkers match.
               </p>
+
+              {/* Stake and Pot Details */}
+              {(incomingChallenge.stakeAmount || 0) > 0 ? (
+                <div className="p-3 rounded-2xl bg-amber-950/60 border border-amber-500/50 text-left space-y-1 shadow-inner">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-amber-300 font-bold">🎯 Match Stake:</span>
+                    <span className="text-white font-black">{(incomingChallenge.stakeAmount || 0).toLocaleString()} UGX</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-emerald-400 font-bold">🏆 Winner Prize Pot:</span>
+                    <span className="text-emerald-300 font-black">{((incomingChallenge.stakeAmount || 0) * 2).toLocaleString()} UGX</span>
+                  </div>
+                  {(currentUser?.walletBalance || 0) < (incomingChallenge.stakeAmount || 0) && (
+                    <p className="text-[10px] text-rose-400 font-bold pt-1">
+                      ⚠️ Insufficient balance ({(currentUser?.walletBalance || 0).toLocaleString()} UGX). Accepting will prompt deposit.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="inline-block px-3 py-1 rounded-full bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs font-bold">
+                  🟢 Free Play (No Stake)
+                </div>
+              )}
+
               <div className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-300 font-medium text-left space-y-0.5">
                 <div className="flex items-center justify-between">
                   <span className="text-rose-400 font-black">👑 1st Move (Red):</span>
@@ -1347,14 +1515,14 @@ export default function App() {
             <div className="flex gap-3 pt-1">
               <button
                 onClick={() => handleRespondChallenge(false)}
-                className="flex-1 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition active:scale-95 flex items-center justify-center gap-1.5"
+                className="flex-1 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <X className="w-4 h-4 text-slate-400" />
                 Decline
               </button>
               <button
                 onClick={() => handleRespondChallenge(true)}
-                className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-red-500 hover:from-amber-400 hover:to-red-400 text-slate-950 font-black text-xs shadow-lg transition active:scale-95 flex items-center justify-center gap-1.5"
+                className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-red-500 hover:from-amber-400 hover:to-red-400 text-slate-950 font-black text-xs shadow-lg transition active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Swords className="w-4 h-4" />
                 Allow & Play ({challengeTimer}s)
