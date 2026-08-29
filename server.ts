@@ -436,8 +436,8 @@ wss.on('connection', (ws: WebSocket) => {
                   winner: null,
                   createdAt: Date.now(),
                   lastMoveTimestamp: Date.now(),
-                  turnTimeLimitSeconds: 45,
-                  turnDeadline: Date.now() + 45000,
+                  turnTimeLimitSeconds: 900,
+                  turnDeadline: Date.now() + 900000,
                   spectatorsCount: 0,
                   isBotGame: true,
                   botDifficulty: 'medium',
@@ -519,8 +519,8 @@ wss.on('connection', (ws: WebSocket) => {
             winner: null,
             createdAt: Date.now(),
             lastMoveTimestamp: Date.now(),
-            turnTimeLimitSeconds: 45,
-            turnDeadline: Date.now() + 45000,
+            turnTimeLimitSeconds: 900,
+            turnDeadline: Date.now() + 900000,
             spectatorsCount: 0,
           };
 
@@ -587,8 +587,8 @@ wss.on('connection', (ws: WebSocket) => {
             winner: null,
             createdAt: Date.now(),
             lastMoveTimestamp: Date.now(),
-            turnTimeLimitSeconds: timeLimit || 45,
-            turnDeadline: Date.now() + (timeLimit || 45) * 1000,
+            turnTimeLimitSeconds: timeLimit || 900,
+            turnDeadline: Date.now() + (timeLimit || 900) * 1000,
             spectatorsCount: 0,
           };
 
@@ -806,8 +806,10 @@ wss.on('connection', (ws: WebSocket) => {
           if (roomId) {
             const room = activeRooms.get(roomId);
             if (room) {
-              broadcastToRoom(room, 'chat:game_message', chatMsg);
+              broadcastToRoom(room, 'chat:game_message', { ...chatMsg, roomId });
             }
+            // Broadcast with roomId payload so any connected client in that room receives it
+            broadcast('chat:game_message', { ...chatMsg, roomId });
           } else {
             globalChatMessages.push(chatMsg);
             if (globalChatMessages.length > 100) {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   GameRoom as IGameRoom,
   UserProfile,
@@ -9,6 +9,7 @@ import {
 } from '../types';
 import { CheckersBoard, BoardTheme } from './CheckersBoard';
 import { AvatarBadge } from './AvatarBadge';
+import { EmojiChatPanel } from './EmojiChatPanel';
 import {
   Flag,
   ArrowLeft,
@@ -16,21 +17,25 @@ import {
   Trophy,
   Sparkles,
   Smile,
-  ChevronUp,
-  ChevronDown,
   History,
   Bot,
   User,
-  Volume2,
-  VolumeX,
   Trash2,
+  AlertTriangle,
+  Clock,
+  MessageCircle,
+  Zap,
+  CheckCircle,
 } from 'lucide-react';
 import { sounds } from '../lib/sound';
 import { getValidMovesForPlayer } from '../lib/checkersEngine';
 import { BOT_DIFFICULTIES } from '../lib/botEngine';
 
 // High-impact reaction emojis
-const REACTION_EMOJIS = ['🔥', '👑', '🎉', '👏', '😎', '⚡', '🤯', '💥', '🎯', '🏆'];
+const REACTION_EMOJIS = [
+  '🔥', '👑', '🎉', '👏', '😎', '⚡', '🤯', '💥', '🎯', '🏆',
+  '😂', '💪', '💀', '🤐', '👋', '❤️', '😱', '🥳', '🍿', '🎲'
+];
 
 interface GameRoomProps {
   room: IGameRoom;
@@ -56,28 +61,28 @@ export const GameRoom: React.FC<GameRoomProps> = ({
   gameChatMessages,
 }) => {
   const [selectedPos, setSelectedPos] = useState<Position | null>(null);
-  const [timeLeft, setTimeLeft] = useState<number>(room.turnTimeLimitSeconds);
+  const [timeLeft, setTimeLeft] = useState<number>(room.turnTimeLimitSeconds || 900);
   const [latestEmojiReaction, setLatestEmojiReaction] = useState<{
     emoji: string;
     sender: string;
   } | null>(null);
   const [isMoveLogOpen, setIsMoveLogOpen] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [moveNotification, setMoveNotification] = useState<string | null>(null);
+
+  const prevHistoryLenRef = useRef<number>(room.history?.length || 0);
+  const warned30Ref = useRef<boolean>(false);
+  const warned15Ref = useRef<boolean>(false);
 
   const isBotGame = Boolean(room.blackPlayer?.isBot || room.id.includes('bot'));
   const botDiffConfig = room.botDifficulty ? BOT_DIFFICULTIES[room.botDifficulty] : BOT_DIFFICULTIES.medium;
 
-  // Show floating reaction whenever a new game chat emoji arrives
-  useEffect(() => {
-    if (gameChatMessages.length > 0) {
-      const lastMsg = gameChatMessages[gameChatMessages.length - 1];
-      setLatestEmojiReaction({ emoji: lastMsg.text, sender: lastMsg.senderName });
-      sounds.playBlast();
-      const timer = setTimeout(() => {
-        setLatestEmojiReaction(null);
-      }, 2500);
-      return () => clearTimeout(timer);
-    }
-  }, [gameChatMessages.length]);
+  // Format seconds into MM:SS
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
 
   // Determine current player's color
   const isRed = room.redPlayer?.id === currentUser.id;
@@ -101,38 +106,83 @@ export const GameRoom: React.FC<GameRoomProps> = ({
     return getValidMovesForPlayer(room.board, room.currentTurn, true);
   }, [room.board, room.currentTurn, room.status]);
 
-  // Turn Countdown Timer effect
+  // Show floating reaction whenever a new game chat emoji arrives
+  useEffect(() => {
+    if (gameChatMessages.length > 0) {
+      const lastMsg = gameChatMessages[gameChatMessages.length - 1];
+      setLatestEmojiReaction({ emoji: lastMsg.text, sender: lastMsg.senderName });
+      sounds.playBlast();
+      const timer = setTimeout(() => {
+        setLatestEmojiReaction(null);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [gameChatMessages.length]);
+
+  // Reset audio warning flags when turn or deadline resets
+  useEffect(() => {
+    warned30Ref.current = false;
+    warned15Ref.current = false;
+  }, [room.currentTurn, room.turnDeadline]);
+
+  // Turn Countdown Timer effect (15 minutes turn timer with low-time notifications)
   useEffect(() => {
     if (room.status !== 'playing' || !room.turnDeadline) return;
 
-    const interval = setInterval(() => {
+    const tick = () => {
       const now = Date.now();
       const diff = Math.max(0, Math.ceil((room.turnDeadline! - now) / 1000));
       setTimeLeft(diff);
 
-      if (diff <= 5 && diff > 0 && isMyTurn) {
+      // Low time audio chime notifications
+      if (diff <= 30 && diff > 25 && !warned30Ref.current) {
+        warned30Ref.current = true;
+        sounds.playTimeWarning();
+      }
+      if (diff <= 15 && diff > 10 && !warned15Ref.current) {
+        warned15Ref.current = true;
+        sounds.playTimeWarning();
+      }
+      if (diff <= 10 && diff > 0 && isMyTurn) {
         sounds.playTick();
       }
-    }, 1000);
+    };
 
+    tick();
+    const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
   }, [room.turnDeadline, room.status, isMyTurn]);
 
-  // Audio feedback on move / game over
+  // Audio feedback and notifications when moves are executed
   useEffect(() => {
-    if (room.history.length > 0) {
+    const currentLen = room.history?.length || 0;
+    if (currentLen > prevHistoryLenRef.current) {
       const lastMove = room.history[room.history.length - 1];
-      if (lastMove.capturedCount > 0) {
-        sounds.playCapture();
-      } else {
-        sounds.playMove();
-      }
-      if (lastMove.becameKing) {
-        setTimeout(() => sounds.playKing(), 200);
-      }
-    }
-  }, [room.history.length]);
+      if (lastMove) {
+        // Sound trigger
+        if (lastMove.capturedCount > 0) {
+          sounds.playCapture();
+        } else {
+          sounds.playMove();
+        }
+        if (lastMove.becameKing) {
+          setTimeout(() => sounds.playKing(), 250);
+        }
 
+        // Notify if opponent moved
+        if (lastMove.playerColor !== playerColor && playerColor !== 'spectator') {
+          const oppName = opponent?.username || (isBotGame ? 'Bot AI' : 'Opponent');
+          setMoveNotification(`🔔 ${oppName} made a move! It's your turn!`);
+          const timer = setTimeout(() => setMoveNotification(null), 3500);
+          prevHistoryLenRef.current = currentLen;
+          return () => clearTimeout(timer);
+        }
+      }
+      prevHistoryLenRef.current = currentLen;
+    }
+  }, [room.history?.length, playerColor, opponent?.username, isBotGame]);
+
+  // Victory / Defeat sounds
   useEffect(() => {
     if (room.status === 'ended' && room.winner) {
       if (room.winner === playerColor) {
@@ -164,36 +214,50 @@ export const GameRoom: React.FC<GameRoomProps> = ({
   };
 
   const lastMove =
-    room.history.length > 0
+    room.history && room.history.length > 0
       ? {
           from: room.history[room.history.length - 1].from,
           to: room.history[room.history.length - 1].to,
         }
       : null;
 
+  const isLowTime = isMyTurn && timeLeft <= 30 && timeLeft > 0;
+
   return (
     <div className="w-full h-[calc(100vh-64px)] max-h-[calc(100vh-64px)] flex flex-col justify-between p-1 sm:p-2.5 relative select-none overflow-hidden bg-slate-950">
+      
       {/* Floating Animated Emoji Reaction Badge */}
       {latestEmojiReaction && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 border-2 border-amber-400 px-3.5 py-1 rounded-full shadow-2xl flex items-center gap-2 animate-bounce pointer-events-none">
-          <span className="text-xl">{latestEmojiReaction.emoji}</span>
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 border-2 border-amber-400 px-4 py-1.5 rounded-full shadow-2xl flex items-center gap-2 animate-bounce pointer-events-none">
+          <span className="text-2xl">{latestEmojiReaction.emoji}</span>
           <span className="text-xs font-black text-amber-300">
             {latestEmojiReaction.sender}
           </span>
         </div>
       )}
 
+      {/* Opponent Move Notification Toast */}
+      {moveNotification && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 bg-emerald-900/95 border border-emerald-500 text-emerald-100 font-black text-xs px-4 py-1.5 rounded-full shadow-2xl flex items-center gap-2 animate-fade-in pointer-events-none">
+          <Sparkles className="w-3.5 h-3.5 text-emerald-300" />
+          <span>{moveNotification}</span>
+        </div>
+      )}
+
       {/* TOP HEADER CONTROLS BAR */}
       <div className="flex items-center justify-between gap-2 bg-slate-900/95 border border-slate-800 px-2.5 sm:px-4 py-1.5 rounded-2xl shadow-xl shrink-0 z-30">
+        
+        {/* Left: Exit Table */}
         <button
           onClick={onLeaveRoom}
           className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 font-bold text-xs border border-slate-700 transition active:scale-95 shrink-0"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
-          <span>Exit Table</span>
+          <span className="hidden sm:inline">Exit Table</span>
+          <span className="sm:hidden">Exit</span>
         </button>
 
-        {/* Center: Turn Timer Badge & Status */}
+        {/* Center: Turn Status, Turn Order & 15-Min Timer */}
         <div className="flex items-center gap-2 min-w-0">
           {room.status === 'waiting' ? (
             <div className="flex items-center gap-1.5 bg-amber-950/80 text-amber-300 font-black text-[11px] sm:text-xs px-3 py-1 rounded-full border border-amber-600/80 shadow animate-pulse">
@@ -202,32 +266,63 @@ export const GameRoom: React.FC<GameRoomProps> = ({
             </div>
           ) : room.status === 'playing' ? (
             isMyTurn ? (
-              <div className="flex items-center gap-1.5 bg-emerald-950 text-emerald-300 font-black text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-1 rounded-full border border-emerald-600 shadow animate-pulse">
-                <Sparkles className="w-3 h-3 text-emerald-400" />
-                <span>YOUR TURN ({timeLeft}s)</span>
+              <div
+                className={`flex items-center gap-1.5 font-black text-[11px] sm:text-xs px-3 py-1 rounded-full border shadow transition ${
+                  isLowTime
+                    ? 'bg-rose-950 text-rose-200 border-rose-500 animate-bounce'
+                    : 'bg-emerald-950 text-emerald-300 border-emerald-600 animate-pulse'
+                }`}
+              >
+                {isLowTime ? (
+                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400 animate-spin" />
+                ) : (
+                  <Sparkles className="w-3 h-3 text-emerald-400" />
+                )}
+                <span>
+                  YOUR TURN ({myColor.toUpperCase()}) • {formatTime(timeLeft)}
+                </span>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5 bg-slate-950 text-slate-300 font-bold text-[11px] sm:text-xs px-2.5 sm:px-3 py-1 rounded-full border border-slate-800">
+              <div className="flex items-center gap-1.5 bg-slate-950 text-slate-300 font-bold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-1 rounded-full border border-slate-800">
                 <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-                <span className="truncate max-w-[120px] sm:max-w-[160px]">
+                <span className="truncate max-w-[130px] sm:max-w-[180px]">
                   {room.currentTurn === 'red'
-                    ? room.redPlayer?.username
-                    : room.blackPlayer?.username}{' '}
-                  ({timeLeft}s)
+                    ? room.redPlayer?.username || 'Red'
+                    : room.blackPlayer?.username || 'Black'}{' '}
+                  ({formatTime(timeLeft)})
                 </span>
               </div>
             )
           ) : (
             <div className="bg-amber-950 text-amber-300 font-black text-xs px-3 py-1 rounded-full border border-amber-700">
               {room.winner
-                ? `Winner: ${room.winner.toUpperCase()}`
+                ? `Winner: ${room.winner.toUpperCase()} (${room.winner === 'red' ? room.redPlayer?.username : room.blackPlayer?.username})`
                 : 'Match Ended'}
             </div>
           )}
         </div>
 
-        {/* Right: Delete Table / Resign / Spectator info / Move log toggle */}
+        {/* Right: Emoji Chat / Move Log / Delete Table / Resign */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* In-Game Emoji Chat Button */}
+          <button
+            onClick={() => setIsChatOpen(!isChatOpen)}
+            className={`flex items-center gap-1 px-2 py-1 rounded-xl text-xs font-bold border transition active:scale-95 ${
+              isChatOpen
+                ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md'
+                : 'bg-slate-800 text-amber-400 border-slate-700 hover:bg-slate-750'
+            }`}
+            title="Open Emoji Chat"
+          >
+            <Smile className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Chat</span>
+            {gameChatMessages.length > 0 && (
+              <span className="text-[10px] font-mono px-1 rounded-full bg-amber-400/20 text-amber-300">
+                {gameChatMessages.length}
+              </span>
+            )}
+          </button>
+
           {/* Delete Table button if owner or waiting */}
           {(room.status === 'waiting' || room.redPlayer?.id === currentUser.id) && onDeleteTable && (
             <button
@@ -236,10 +331,11 @@ export const GameRoom: React.FC<GameRoomProps> = ({
               title="Delete and close this Game Table"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span>Delete Table</span>
+              <span className="hidden sm:inline">Delete Table</span>
             </button>
           )}
 
+          {/* Toggle Move History Log */}
           <button
             onClick={() => setIsMoveLogOpen(!isMoveLogOpen)}
             className={`flex items-center gap-1 px-2 py-1 rounded-xl text-xs font-bold border transition ${
@@ -251,7 +347,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({
           >
             <History className="w-3.5 h-3.5 text-amber-400" />
             <span className="hidden sm:inline">Log</span>
-            <span className="text-[10px] font-mono opacity-80">({room.history.length})</span>
+            <span className="text-[10px] font-mono opacity-80">({room.history?.length || 0})</span>
           </button>
 
           {playerColor !== 'spectator' && room.status === 'playing' && (
@@ -260,15 +356,54 @@ export const GameRoom: React.FC<GameRoomProps> = ({
               className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-950 hover:bg-rose-900 text-rose-300 font-bold text-xs border border-rose-800 transition active:scale-95"
             >
               <Flag className="w-3 h-3" />
-              <span>Resign</span>
+              <span className="hidden sm:inline">Resign</span>
             </button>
           )}
         </div>
       </div>
 
+      {/* TURN ORDER & MATCH OVERVIEW STRIP */}
+      <div className="flex items-center justify-between px-2.5 sm:px-4 py-1 bg-slate-900/80 border border-slate-800/80 rounded-xl my-1 text-[10px] sm:text-xs shrink-0 font-bold">
+        {/* Red Player (1st to Move) */}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[9px] font-black uppercase">
+            👑 1st Move
+          </span>
+          <span className="text-slate-300 truncate max-w-[100px] sm:max-w-[160px]">
+            {room.redPlayer?.username || 'Red Player'} (Red)
+          </span>
+        </div>
+
+        {/* VS / Turn Timer Info */}
+        <div className="flex items-center gap-1.5 text-amber-400 font-mono text-[10px] sm:text-xs">
+          <Clock className="w-3 h-3" />
+          <span>15 Min Timer</span>
+        </div>
+
+        {/* Black Player (2nd to Move) */}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-slate-300 truncate max-w-[100px] sm:max-w-[160px] text-right">
+            {room.blackPlayer?.username || (isBotGame ? 'Checkers Bot' : 'Waiting...')} (Black)
+          </span>
+          <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 border border-slate-700 text-[9px] font-black uppercase">
+            ⚫ 2nd Move
+          </span>
+        </div>
+      </div>
+
+      {/* CRITICAL LOW-TIME WARNING BANNER */}
+      {isLowTime && (
+        <div className="bg-rose-600 text-white font-black text-xs py-1 px-3 rounded-xl shadow-lg border border-rose-400 flex items-center justify-center gap-2 animate-bounce shrink-0 z-30">
+          <AlertTriangle className="w-4 h-4" />
+          <span>
+            ⚠️ TIME RUNNING OUT: Only {formatTime(timeLeft)} remaining to execute your move!
+          </span>
+        </div>
+      )}
+
       {/* MOBILE PORTRAIT COMPACT TOP BAR (< md screens) */}
-      <div className="flex md:hidden items-center justify-between px-2.5 py-1 bg-slate-900/80 border border-slate-800/90 rounded-xl my-1 text-xs shrink-0">
-        {/* Opponent Info (Top) */}
+      <div className="flex md:hidden items-center justify-between px-2.5 py-1 bg-slate-900/80 border border-slate-800/90 rounded-xl mb-1 text-xs shrink-0">
+        {/* Opponent Info */}
         <div className="flex items-center gap-1.5 min-w-0">
           <AvatarBadge
             avatarId={opponent?.avatarId || 'avatar-cyber'}
@@ -279,11 +414,9 @@ export const GameRoom: React.FC<GameRoomProps> = ({
             <div className="font-black text-slate-200 text-xs truncate max-w-[100px]">
               {opponent?.username || (isBotGame ? 'Bot AI' : 'Opponent')}
             </div>
-            {isBotGame && (
-              <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full border ${botDiffConfig.badgeColor}`}>
-                {botDiffConfig.name.split(' ')[0]}
-              </span>
-            )}
+            <span className="text-[9px] font-bold text-slate-400">
+              {opponentColor === 'red' ? '1st Move (Red)' : '2nd Move (Black)'}
+            </span>
           </div>
         </div>
 
@@ -294,14 +427,14 @@ export const GameRoom: React.FC<GameRoomProps> = ({
           <span className="text-slate-300">⚫ {room.capturedRed}/12</span>
         </div>
 
-        {/* User Info (Top preview) */}
+        {/* User Info */}
         <div className="flex items-center gap-1.5 min-w-0">
           <div className="text-right min-w-0">
             <div className="font-black text-slate-200 text-xs truncate max-w-[90px]">
               {currentUser.username}
             </div>
             <div className="text-[9px] text-amber-400 font-bold">
-              {myColor.toUpperCase()}
+              {myColor === 'red' ? '1st Move (Red)' : '2nd Move (Black)'}
             </div>
           </div>
           <AvatarBadge
@@ -312,7 +445,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({
         </div>
       </div>
 
-      {/* MAIN LANDSCAPE ARENA (95% SCREEN OCCUPANCY) */}
+      {/* MAIN ARENA (Checkers Board and Flanks) */}
       <div className="flex-1 flex flex-row items-center justify-center gap-1.5 sm:gap-3 overflow-hidden relative min-h-0">
         
         {/* LEFT COMPACT SLIM FLANK (Opponent / Bot AI) - Visible on md+ */}
@@ -321,7 +454,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({
           <div
             className={`p-1.5 rounded-xl border transition text-center space-y-1 ${
               room.currentTurn === opponentColor
-                ? 'bg-slate-950 border-amber-400 shadow-md shadow-amber-500/20'
+                ? 'bg-slate-950 border-amber-400 shadow-md shadow-amber-500/20 ring-1 ring-amber-400/50'
                 : 'bg-slate-950/70 border-slate-800'
             }`}
           >
@@ -336,16 +469,10 @@ export const GameRoom: React.FC<GameRoomProps> = ({
               {opponent?.username || (isBotGame ? 'Checkers Bot' : 'Opponent')}
             </div>
             
-            {/* Bot Difficulty Tag or Rank */}
-            {isBotGame ? (
-              <div className={`text-[9px] font-black px-1.5 py-0.5 rounded-full border ${botDiffConfig.badgeColor} truncate`}>
-                {botDiffConfig.icon} {botDiffConfig.name.split(' ')[0]}
-              </div>
-            ) : (
-              <div className="text-[9px] text-amber-400 font-bold">
-                {opponent?.rating || 1200} ELO
-              </div>
-            )}
+            {/* Turn Order Tag */}
+            <div className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-slate-900 border border-slate-800 text-slate-300">
+              {opponentColor === 'red' ? '👑 1st (Red)' : '⚫ 2nd (Black)'}
+            </div>
 
             {/* Pieces captured */}
             <div className="bg-slate-900 border border-slate-800 rounded-lg p-1 text-[10px] font-bold flex items-center justify-between">
@@ -353,14 +480,6 @@ export const GameRoom: React.FC<GameRoomProps> = ({
               <span className="text-amber-400 font-black">
                 {opponentColor === 'red' ? room.capturedBlack : room.capturedRed}/12
               </span>
-            </div>
-          </div>
-
-          {/* Opponent pieces indicator */}
-          <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-1.5 text-center space-y-0.5">
-            <div className="text-[9px] text-slate-400 uppercase font-black">Color</div>
-            <div className={`text-xs font-black ${opponentColor === 'red' ? 'text-rose-400' : 'text-slate-300'}`}>
-              {opponentColor.toUpperCase()}
             </div>
           </div>
 
@@ -383,7 +502,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({
           </div>
         </div>
 
-        {/* CENTER STAGE: CHECKERS BOARD (95% SCREEN FIT) */}
+        {/* CENTER STAGE: CHECKERS BOARD */}
         <div className="flex-1 flex items-center justify-center w-full h-full max-h-full overflow-hidden min-h-0 relative">
           <CheckersBoard
             board={room.board}
@@ -399,7 +518,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({
 
           {/* Waiting For Opponent Overlay on Board */}
           {room.status === 'waiting' && (
-            <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-[2px] flex items-center justify-center p-4 z-20">
+            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-[2px] flex items-center justify-center p-4 z-20">
               <div className="bg-slate-900/95 border-2 border-amber-500/80 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-fade-in">
                 <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto border border-amber-500/30">
                   <span className="w-4 h-4 rounded-full bg-amber-400 animate-ping" />
@@ -408,7 +527,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({
                 <div className="space-y-1">
                   <h3 className="text-base font-black text-white">Table Created & Waiting</h3>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    This game table is active in the lobby. Waiting for another player to join...
+                    This game table is active in the lobby. Waiting for an opponent to accept or join...
                   </p>
                 </div>
 
@@ -432,7 +551,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({
           <div
             className={`p-1.5 rounded-xl border transition text-center space-y-1 ${
               room.currentTurn === myColor
-                ? 'bg-slate-950 border-amber-400 shadow-md shadow-amber-500/20'
+                ? 'bg-slate-950 border-amber-400 shadow-md shadow-amber-500/20 ring-1 ring-amber-400/50'
                 : 'bg-slate-950/70 border-slate-800'
             }`}
           >
@@ -446,8 +565,10 @@ export const GameRoom: React.FC<GameRoomProps> = ({
             <div className="font-black text-slate-100 text-[11px] truncate">
               {currentUser.username} (You)
             </div>
-            <div className="text-[9px] text-amber-400 font-bold">
-              {currentUser.rating || 1200} ELO
+            
+            {/* Turn Order Tag */}
+            <div className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-slate-900 border border-slate-800 text-amber-300">
+              {myColor === 'red' ? '👑 1st (Red)' : '⚫ 2nd (Black)'}
             </div>
 
             {/* Pieces captured */}
@@ -463,15 +584,15 @@ export const GameRoom: React.FC<GameRoomProps> = ({
           <div className="flex-1 flex flex-col overflow-hidden bg-slate-950/80 rounded-xl border border-slate-800 p-1.5 min-h-0">
             <div className="text-[8px] font-black text-amber-400 uppercase text-center border-b border-slate-800 pb-0.5 flex items-center justify-between">
               <span>Moves</span>
-              <span>#{room.history.length}</span>
+              <span>#{room.history?.length || 0}</span>
             </div>
             <div className="flex-1 overflow-y-auto space-y-1 pt-1 custom-scrollbar min-h-0 text-[10px]">
-              {room.history.length === 0 ? (
+              {!room.history || room.history.length === 0 ? (
                 <div className="text-[9px] text-slate-500 text-center py-2 italic">
                   No moves
                 </div>
               ) : (
-                room.history.slice(-6).map((m, idx) => (
+                room.history.slice(-6).map((m) => (
                   <div
                     key={m.id}
                     className="p-1 rounded bg-slate-900/90 border border-slate-800/80 flex items-center justify-between"
@@ -507,14 +628,17 @@ export const GameRoom: React.FC<GameRoomProps> = ({
         </div>
       </div>
 
-      {/* MOBILE PORTRAIT BOTTOM BAR WITH QUICK EMOJI REACTS (< md screens) */}
-      <div className="flex md:hidden items-center justify-between gap-1 px-2 py-1 bg-slate-900/90 border border-slate-800 rounded-xl shrink-0">
-        <div className="flex items-center gap-1 overflow-x-auto custom-scrollbar py-0.5">
-          {REACTION_EMOJIS.slice(0, 6).map((emoji, idx) => (
+      {/* BOTTOM QUICK EMOJI REACTS BAR (< md screens and quick bar) */}
+      <div className="flex items-center justify-between gap-1 px-2 py-1 bg-slate-900/90 border border-slate-800 rounded-xl shrink-0 mt-1">
+        <span className="text-[10px] font-black text-amber-400 hidden sm:inline">
+          Quick Emojis:
+        </span>
+        <div className="flex items-center gap-1 overflow-x-auto custom-scrollbar py-0.5 flex-1">
+          {REACTION_EMOJIS.slice(0, 10).map((emoji, idx) => (
             <button
               key={idx}
               onClick={() => handleEmojiClick(emoji)}
-              className="p-1 text-base bg-slate-950 hover:bg-amber-500/20 rounded-lg border border-slate-800 transition active:scale-90"
+              className="p-1 text-sm sm:text-base bg-slate-950 hover:bg-amber-500/20 rounded-lg border border-slate-800 hover:scale-110 transition active:scale-90 shrink-0"
             >
               {emoji}
             </button>
@@ -522,13 +646,25 @@ export const GameRoom: React.FC<GameRoomProps> = ({
         </div>
       </div>
 
-      {/* OVERLAY MOVE LOG DRAWER (Expandable when clicking Log) */}
+      {/* IN-GAME EMOJI CHAT MODAL / DRAWER */}
+      {isChatOpen && (
+        <div className="absolute inset-x-2 sm:inset-x-auto sm:right-6 bottom-14 z-50 w-auto sm:w-80 shadow-2xl animate-fade-in">
+          <EmojiChatPanel
+            title="Opponent Emoji Chat"
+            messages={gameChatMessages}
+            onSendEmoji={handleEmojiClick}
+            heightClass="h-[360px]"
+          />
+        </div>
+      )}
+
+      {/* OVERLAY MOVE LOG DRAWER */}
       {isMoveLogOpen && (
-        <div className="absolute bottom-12 right-2 sm:right-6 z-40 w-72 max-w-[90vw] bg-slate-900/95 border-2 border-slate-700 rounded-2xl p-3 shadow-2xl backdrop-blur-md animate-fade-in space-y-2">
+        <div className="absolute bottom-14 right-2 sm:right-6 z-40 w-72 max-w-[90vw] bg-slate-900/95 border-2 border-slate-700 rounded-2xl p-3 shadow-2xl backdrop-blur-md animate-fade-in space-y-2">
           <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
             <div className="flex items-center gap-1.5 text-xs font-black text-amber-400">
               <History className="w-3.5 h-3.5" />
-              <span>Full Move History ({room.history.length})</span>
+              <span>Full Move History ({room.history?.length || 0})</span>
             </div>
             <button
               onClick={() => setIsMoveLogOpen(false)}
@@ -539,7 +675,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({
           </div>
 
           <div className="max-h-48 overflow-y-auto space-y-1.5 custom-scrollbar pr-1">
-            {room.history.length === 0 ? (
+            {!room.history || room.history.length === 0 ? (
               <div className="text-xs text-slate-500 text-center py-4">
                 No moves executed yet.
               </div>

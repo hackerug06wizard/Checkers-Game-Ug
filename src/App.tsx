@@ -38,6 +38,8 @@ import {
   deleteGuestPlayerFromFirestore,
   cleanUpAllGuestPlayersFromFirestore,
   setUserOfflineInFirestore,
+  sendGameChatToFirestore,
+  subscribeToGameChat,
 } from './lib/firebase';
 import {
   createInitialBoard,
@@ -94,6 +96,11 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const notificationTimerRef = useRef<any>(null);
   const handledChallengeIdsRef = useRef<Set<string>>(new Set());
+  const activeRoomRef = useRef<GameRoom | null>(null);
+
+  useEffect(() => {
+    activeRoomRef.current = activeRoom;
+  }, [activeRoom]);
 
   // Guest Lifecycle Cleanup: only clean up on explicit unload or logout
   useEffect(() => {
@@ -308,7 +315,26 @@ export default function App() {
               case 'game:started':
               case 'game:joined':
               case 'game:updated': {
+                const prev = activeRoomRef.current;
                 setActiveRoom(payload);
+                if (!prev || prev.id !== payload.id) {
+                  // Match entry announcement
+                  const redName = payload.redPlayer?.username || 'Red Player';
+                  const blackName = payload.blackPlayer?.username || 'Black Player';
+                  showNotification(`⚔️ Match Started! ${redName} plays FIRST with Red pieces.`, 'info', 6000);
+                } else if (payload.lastMoveTimestamp !== prev.lastMoveTimestamp) {
+                  const lastMove = payload.history && payload.history.length > 0 ? payload.history[payload.history.length - 1] : null;
+                  if (lastMove) {
+                    const moverId = lastMove.playerColor === 'red' ? payload.redPlayer?.id : payload.blackPlayer?.id;
+                    if (moverId !== currentUser?.id) {
+                      if (lastMove.capturedCount > 0) sounds.playCapture();
+                      else sounds.playMove();
+                      if (lastMove.becameKing) setTimeout(() => sounds.playKing(), 200);
+                      const oppName = lastMove.playerColor === 'red' ? (payload.redPlayer?.username || 'Red') : (payload.blackPlayer?.username || 'Black');
+                      showNotification(`🔔 ${oppName} made a move! It's your turn!`, 'info', 3500);
+                    }
+                  }
+                }
                 break;
               }
 
@@ -333,7 +359,13 @@ export default function App() {
               }
 
               case 'chat:game_message': {
-                setGameChatMessages((prev) => [...prev.slice(-80), payload]);
+                if (payload.roomId && activeRoomRef.current && payload.roomId !== activeRoomRef.current.id) {
+                  break;
+                }
+                setGameChatMessages((prev) => {
+                  if (prev.some((m) => m.id === payload.id)) return prev;
+                  return [...prev.slice(-80), payload];
+                });
                 break;
               }
 
@@ -455,11 +487,36 @@ export default function App() {
     };
   }, [currentUser]);
 
-  // Keep active multiplayer room synchronized in real time
+  // Keep active multiplayer room synchronized in real time with move sound notifications
   useEffect(() => {
     if (!activeRoom?.id || activeRoom.blackPlayer?.isBot || activeRoom.id.includes('bot')) return;
     const unsub = subscribeToGameRoom(activeRoom.id, (roomData) => {
       if (roomData && roomData.lastMoveTimestamp && roomData.lastMoveTimestamp !== activeRoom.lastMoveTimestamp) {
+        const lastMove =
+          roomData.history && roomData.history.length > 0
+            ? roomData.history[roomData.history.length - 1]
+            : null;
+        if (lastMove) {
+          const moverId =
+            lastMove.playerColor === 'red'
+              ? roomData.redPlayer?.id
+              : roomData.blackPlayer?.id;
+          if (moverId !== currentUser?.id) {
+            if (lastMove.capturedCount > 0) {
+              sounds.playCapture();
+            } else {
+              sounds.playMove();
+            }
+            if (lastMove.becameKing) {
+              setTimeout(() => sounds.playKing(), 200);
+            }
+            const oppName =
+              lastMove.playerColor === 'red'
+                ? roomData.redPlayer?.username || 'Red'
+                : roomData.blackPlayer?.username || 'Black';
+            showNotification(`🔔 ${oppName} made a move! It's your turn!`, 'info', 3500);
+          }
+        }
         setActiveRoom(roomData);
         if (roomData.status === 'ended' && roomData.winner) {
           const myColor = activeRoom.redPlayer?.id === currentUser?.id ? 'red' : 'black';
@@ -468,7 +525,18 @@ export default function App() {
       }
     });
     return () => unsub();
-  }, [activeRoom?.id, activeRoom?.lastMoveTimestamp]);
+  }, [activeRoom?.id, activeRoom?.lastMoveTimestamp, currentUser?.id]);
+
+  // Subscribe to real-time chat/emoji messages for the active room
+  useEffect(() => {
+    if (!activeRoom?.id) return;
+    const unsub = subscribeToGameChat(activeRoom.id, (messages) => {
+      if (messages && messages.length > 0) {
+        setGameChatMessages(messages);
+      }
+    });
+    return () => unsub();
+  }, [activeRoom?.id]);
 
   const sendWs = (type: string, payload: any) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -620,8 +688,8 @@ export default function App() {
         winner: null,
         createdAt: Date.now(),
         lastMoveTimestamp: Date.now(),
-        turnTimeLimitSeconds: 45,
-        turnDeadline: Date.now() + 45000,
+        turnTimeLimitSeconds: 900,
+        turnDeadline: Date.now() + 900000,
         spectatorsCount: 0,
       };
 
@@ -837,8 +905,8 @@ export default function App() {
         winner: null,
         createdAt: Date.now(),
         lastMoveTimestamp: Date.now(),
-        turnTimeLimitSeconds: 45,
-        turnDeadline: Date.now() + 45000,
+        turnTimeLimitSeconds: 900,
+        turnDeadline: Date.now() + 900000,
         spectatorsCount: 0,
       };
 
@@ -870,8 +938,8 @@ export default function App() {
         winner: null,
         createdAt: Date.now(),
         lastMoveTimestamp: Date.now(),
-        turnTimeLimitSeconds: 45,
-        turnDeadline: Date.now() + 45000,
+        turnTimeLimitSeconds: 900,
+        turnDeadline: Date.now() + 900000,
         spectatorsCount: 0,
       };
 
@@ -921,7 +989,8 @@ export default function App() {
           color: 'black',
         },
         status: 'playing',
-        turnDeadline: Date.now() + (roomToJoin.turnTimeLimitSeconds || 45) * 1000,
+        turnTimeLimitSeconds: roomToJoin.turnTimeLimitSeconds || 900,
+        turnDeadline: Date.now() + (roomToJoin.turnTimeLimitSeconds || 900) * 1000,
         lastMoveTimestamp: Date.now(),
       };
       setActiveRoom(updatedRoom);
@@ -959,6 +1028,7 @@ export default function App() {
         recordGameOutcome(myColor, over.winner || 'draw');
       }
 
+      const timeLimitSec = activeRoom.turnTimeLimitSeconds || 900;
       const updatedRoom: GameRoom = {
         ...activeRoom,
         board: newBoard,
@@ -981,6 +1051,7 @@ export default function App() {
         winner: over.winner || null,
         winReason: over.reason,
         lastMoveTimestamp: Date.now(),
+        turnDeadline: Date.now() + timeLimitSec * 1000,
       };
 
       setActiveRoom(updatedRoom);
@@ -1015,7 +1086,7 @@ export default function App() {
     setGameChatMessages([]);
   };
 
-  const handleSendGameChat = (text: string) => {
+  const handleSendGameChat = async (text: string) => {
     if (!activeRoom) return;
     sounds.playBlast();
     sendWs('chat:send', { text, roomId: activeRoom.id });
@@ -1029,7 +1100,15 @@ export default function App() {
         text,
         timestamp: Date.now(),
       };
-      setGameChatMessages((prev) => [...prev.slice(-80), newMsg]);
+      setGameChatMessages((prev) => {
+        if (prev.some((m) => m.id === newMsg.id)) return prev;
+        return [...prev.slice(-80), newMsg];
+      });
+      try {
+        await sendGameChatToFirestore(activeRoom.id, newMsg);
+      } catch (e) {
+        console.warn('sendGameChatToFirestore failed:', e);
+      }
     }
   };
 
@@ -1240,13 +1319,25 @@ export default function App() {
             </div>
 
             <div className="space-y-1.5">
-              <div className="inline-block px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-[10px] font-black text-amber-400">
-                Expires in {challengeTimer}s
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-[10px] font-black text-amber-400">
+                <span>⏱️ 15 Min Turn Timer</span>
+                <span>•</span>
+                <span>Expires in {challengeTimer}s</span>
               </div>
               <h3 className="text-lg font-black text-white">Incoming Match Challenge!</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                <strong className="text-amber-400">{incomingChallenge.fromUser.username}</strong> ({incomingChallenge.fromUser.rating || incomingChallenge.fromUser.elo || 1200} ELO) wants to challenge you. Allowing will create a live game table for both of you!
+                <strong className="text-amber-400">{incomingChallenge.fromUser.username}</strong> ({incomingChallenge.fromUser.rating || incomingChallenge.fromUser.elo || 1200} ELO) challenged you to a 15-minute Checkers match.
               </p>
+              <div className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-300 font-medium text-left space-y-0.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-rose-400 font-black">👑 1st Move (Red):</span>
+                  <span className="text-white font-bold">{incomingChallenge.fromUser.username}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400 font-black">⚫ 2nd Move (Black):</span>
+                  <span className="text-white font-bold">{currentUser?.username || 'You'}</span>
+                </div>
+              </div>
             </div>
 
             <div className="flex justify-center">

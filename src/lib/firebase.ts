@@ -487,8 +487,8 @@ export function serializeRoomForFirestore(room: GameRoom): any {
     winReason: room.winReason || null,
     createdAt: room.createdAt || Date.now(),
     lastMoveTimestamp: room.lastMoveTimestamp || Date.now(),
-    turnTimeLimitSeconds: room.turnTimeLimitSeconds || 45,
-    turnDeadline: room.turnDeadline || Date.now() + 45000,
+    turnTimeLimitSeconds: room.turnTimeLimitSeconds || 900,
+    turnDeadline: room.turnDeadline || Date.now() + 900000,
     spectatorsCount: room.spectatorsCount || 0,
     isBotGame: !!room.isBotGame,
     botDifficulty: room.botDifficulty || null,
@@ -638,8 +638,8 @@ export async function respondToChallengeInFirestore(
       winner: null,
       createdAt: Date.now(),
       lastMoveTimestamp: Date.now(),
-      turnTimeLimitSeconds: 45,
-      turnDeadline: Date.now() + 45000,
+      turnTimeLimitSeconds: 900,
+      turnDeadline: Date.now() + 900000,
       spectatorsCount: 0,
     };
 
