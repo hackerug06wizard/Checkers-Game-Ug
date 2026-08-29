@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   UserProfile,
   GameRoom,
+  GamePlayer,
   Challenge,
   ChatMessage,
   LeaderboardEntry,
@@ -544,6 +545,7 @@ export default function App() {
                   if (roomData) setActiveRoom(roomData);
                 });
               }
+              sounds.playMove();
               showNotification(
                 `⚔️ Match accepted! Starting game vs ${targetUser.username}...`,
                 'info',
@@ -560,7 +562,7 @@ export default function App() {
           });
         }
       } catch (err) {
-        console.warn('Firestore backup challenge sync error:', err);
+        console.warn('Firestore challenge sync error:', err);
       }
     }
     showNotification(
@@ -585,6 +587,51 @@ export default function App() {
         'info',
         5000
       );
+
+      // Challenger (fromUser) is Red (moves first), Opponent who accepts (toUser) is Black
+      const redPlayer: GamePlayer = {
+        id: challenge.fromUser.id,
+        username: challenge.fromUser.username,
+        avatarId: challenge.fromUser.avatarId,
+        rating: challenge.fromUser.rating || challenge.fromUser.elo || 1200,
+        color: 'red',
+      };
+
+      const myProfile = currentUser || challenge.toUser;
+      const blackPlayer: GamePlayer = {
+        id: myProfile.id,
+        username: myProfile.username,
+        avatarId: myProfile.avatarId,
+        rating: myProfile.rating || myProfile.elo || 1200,
+        color: 'black',
+      };
+
+      const initialRoom: GameRoom = {
+        id: roomId,
+        name: `${redPlayer.username} vs ${blackPlayer.username}`,
+        status: 'playing',
+        redPlayer,
+        blackPlayer,
+        currentTurn: 'red',
+        board: createInitialBoard(),
+        history: [],
+        capturedRed: 0,
+        capturedBlack: 0,
+        winner: null,
+        createdAt: Date.now(),
+        lastMoveTimestamp: Date.now(),
+        turnTimeLimitSeconds: 45,
+        turnDeadline: Date.now() + 45000,
+        spectatorsCount: 0,
+      };
+
+      // Set active room immediately for instant UI response
+      setActiveRoom(initialRoom);
+
+      // Subscribe to Firestore room updates for turn-by-turn syncing
+      subscribeToGameRoom(roomId, (roomData) => {
+        if (roomData) setActiveRoom(roomData);
+      });
     }
 
     sendWs('challenge:respond', {

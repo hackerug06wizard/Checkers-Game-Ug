@@ -470,6 +470,51 @@ export async function setUserOfflineInFirestore(userId: string): Promise<void> {
 // REAL-TIME FIRESTORE CHALLENGE SYSTEM
 // ==========================================
 
+// Helper to serialize GameRoom for Firestore (encodes 2D board to avoid nested array rejection)
+export function serializeRoomForFirestore(room: GameRoom): any {
+  return {
+    id: room.id,
+    name: room.name,
+    status: room.status,
+    redPlayer: room.redPlayer || null,
+    blackPlayer: room.blackPlayer || null,
+    currentTurn: room.currentTurn || 'red',
+    boardJson: JSON.stringify(room.board || []),
+    history: room.history || [],
+    capturedRed: room.capturedRed || 0,
+    capturedBlack: room.capturedBlack || 0,
+    winner: room.winner || null,
+    winReason: room.winReason || null,
+    createdAt: room.createdAt || Date.now(),
+    lastMoveTimestamp: room.lastMoveTimestamp || Date.now(),
+    turnTimeLimitSeconds: room.turnTimeLimitSeconds || 45,
+    turnDeadline: room.turnDeadline || Date.now() + 45000,
+    spectatorsCount: room.spectatorsCount || 0,
+    isBotGame: !!room.isBotGame,
+    botDifficulty: room.botDifficulty || null,
+  };
+}
+
+// Helper to deserialize GameRoom from Firestore
+export function deserializeRoomFromFirestore(data: any): GameRoom | null {
+  if (!data) return null;
+  let board = data.board;
+  if (data.boardJson && typeof data.boardJson === 'string') {
+    try {
+      board = JSON.parse(data.boardJson);
+    } catch (e) {
+      console.warn('Failed to parse boardJson:', e);
+    }
+  }
+  if (!board || !Array.isArray(board) || board.length !== 8) {
+    board = createInitialBoard();
+  }
+  return {
+    ...data,
+    board,
+  } as GameRoom;
+}
+
 export async function sendChallengeToFirestore(
   fromUser: UserProfile,
   toUser: UserProfile,
@@ -482,6 +527,7 @@ export async function sendChallengeToFirestore(
     fromUser,
     toUser,
     targetUserId: toUser.id,
+    targetUsername: toUser.username,
     status: 'pending',
     createdAt: Date.now(),
   };
@@ -517,12 +563,26 @@ export function subscribeToIncomingChallenges(userId: string, callback: (challen
   }
 }
 
-export function subscribeToChallengeDoc(challengeId: string, callback: (challenge: any) => void) {
+export function subscribeToChallengeDoc(
+  challengeId: string,
+  callback: (challenge: { status: string; roomId?: string; room?: GameRoom } | null) => void
+) {
   try {
     const challengeRef = doc(db, 'challenges', challengeId);
     return onSnapshot(challengeRef, (snap) => {
       if (snap.exists()) {
-        callback(snap.data());
+        const raw = snap.data();
+        let room: GameRoom | null = null;
+        if (raw.roomSerialized) {
+          room = deserializeRoomFromFirestore(raw.roomSerialized);
+        } else if (raw.room) {
+          room = deserializeRoomFromFirestore(raw.room);
+        }
+        callback({
+          status: raw.status,
+          roomId: raw.roomId,
+          room: room || undefined,
+        });
       }
     });
   } catch (err) {
@@ -583,8 +643,17 @@ export async function respondToChallengeInFirestore(
       spectatorsCount: 0,
     };
 
+    const serializedRoom = serializeRoomForFirestore(newRoom);
     await saveGameRoomToFirestore(newRoom);
-    await setDoc(challengeRef, { status: 'accepted', roomId, room: newRoom }, { merge: true });
+    await setDoc(
+      challengeRef,
+      {
+        status: 'accepted',
+        roomId,
+        roomSerialized: serializedRoom,
+      },
+      { merge: true }
+    );
     return { roomId, room: newRoom };
   } catch (e) {
     console.error('respondToChallengeInFirestore error:', e);
@@ -599,7 +668,9 @@ export async function respondToChallengeInFirestore(
 export async function saveGameRoomToFirestore(room: GameRoom): Promise<void> {
   try {
     const roomRef = doc(db, 'rooms', room.id);
-    await setDoc(roomRef, room, { merge: true });
+    const serialized = serializeRoomForFirestore(room);
+    await setDoc(roomRef, serialized, { merge: true });
+    console.log(`[Firestore] Game table room saved: ${room.id}`);
   } catch (e) {
     console.warn('saveGameRoomToFirestore error:', e);
   }
@@ -621,9 +692,9 @@ export function subscribeToAllGameRooms(callback: (rooms: GameRoom[]) => void) {
     return onSnapshot(q, (snapshot) => {
       const rooms: GameRoom[] = [];
       snapshot.forEach((docSnap) => {
-        const data = docSnap.data() as GameRoom;
-        if (data && (data.status === 'waiting' || data.status === 'playing')) {
-          rooms.push(data);
+        const room = deserializeRoomFromFirestore(docSnap.data());
+        if (room && (room.status === 'waiting' || room.status === 'playing')) {
+          rooms.push(room);
         }
       });
       rooms.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -640,7 +711,10 @@ export function subscribeToGameRoom(roomId: string, callback: (room: GameRoom | 
     const roomRef = doc(db, 'rooms', roomId);
     return onSnapshot(roomRef, (snap) => {
       if (snap.exists()) {
-        callback(snap.data() as GameRoom);
+        const room = deserializeRoomFromFirestore(snap.data());
+        callback(room);
+      } else {
+        callback(null);
       }
     });
   } catch (e) {

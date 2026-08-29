@@ -92,6 +92,7 @@ export interface GameRoom {
   turnDeadline: number | null;
   spectatorsCount: number;
   isPrivate?: boolean;
+  isBotGame?: boolean;
   botDifficulty?: 'easy' | 'medium' | 'hard';
 }
 

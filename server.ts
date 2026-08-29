@@ -392,20 +392,17 @@ wss.on('connection', (ws: WebSocket) => {
                 payload: challenge,
               })
             );
-            ws.send(
-              JSON.stringify({
-                type: 'challenge:sent_ack',
-                payload: challenge,
-              })
-            );
-          } else {
-            // Simulated/idle online user or practice account - auto-accept and start match!
-            ws.send(
-              JSON.stringify({
-                type: 'challenge:sent_ack',
-                payload: challenge,
-              })
-            );
+          }
+
+          ws.send(
+            JSON.stringify({
+              type: 'challenge:sent_ack',
+              payload: challenge,
+            })
+          );
+
+          // Only auto-accept if explicitly challenging the AI Bot
+          if (targetUserId === 'bot_ai' || toUser.id === 'bot_ai' || (toUser as any).isBot) {
             setTimeout(() => {
               if (activeChallenges.has(challengeId)) {
                 const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -418,10 +415,10 @@ wss.on('connection', (ws: WebSocket) => {
                   color: 'red',
                 };
                 const blackPlayer: GamePlayer = {
-                  id: toUser.id,
-                  username: toUser.username,
-                  avatarId: toUser.avatarId,
-                  rating: toUser.rating || 1200,
+                  id: 'bot_ai',
+                  username: 'Checkers Bot (AI)',
+                  avatarId: 'avatar-cyber',
+                  rating: 1300,
                   color: 'black',
                   isBot: true,
                 };
@@ -442,6 +439,8 @@ wss.on('connection', (ws: WebSocket) => {
                   turnTimeLimitSeconds: 45,
                   turnDeadline: Date.now() + 45000,
                   spectatorsCount: 0,
+                  isBotGame: true,
+                  botDifficulty: 'medium',
                 };
                 activeRooms.set(roomId, room);
                 activeChallenges.delete(challengeId);
