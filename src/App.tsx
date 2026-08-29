@@ -578,6 +578,15 @@ export default function App() {
 
     const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
+    if (accept) {
+      sounds.playMove();
+      showNotification(
+        `⚔️ Challenge allowed! Creating game table for you and ${challenge.fromUser.username}...`,
+        'info',
+        5000
+      );
+    }
+
     sendWs('challenge:respond', {
       challengeId: challenge.id,
       accept,
@@ -1189,7 +1198,7 @@ export default function App() {
               </div>
               <h3 className="text-lg font-black text-white">Incoming Match Challenge!</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                <strong className="text-amber-400">{incomingChallenge.fromUser.username}</strong> ({incomingChallenge.fromUser.rating || incomingChallenge.fromUser.elo || 1200} ELO) has challenged you to an online Checkers duel!
+                <strong className="text-amber-400">{incomingChallenge.fromUser.username}</strong> ({incomingChallenge.fromUser.rating || incomingChallenge.fromUser.elo || 1200} ELO) wants to challenge you. Allowing will create a live game table for both of you!
               </p>
             </div>
 
@@ -1200,15 +1209,17 @@ export default function App() {
             <div className="flex gap-3 pt-1">
               <button
                 onClick={() => handleRespondChallenge(false)}
-                className="flex-1 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition active:scale-95"
+                className="flex-1 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition active:scale-95 flex items-center justify-center gap-1.5"
               >
+                <X className="w-4 h-4 text-slate-400" />
                 Decline
               </button>
               <button
                 onClick={() => handleRespondChallenge(true)}
-                className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-red-500 hover:from-amber-400 hover:to-red-400 text-slate-950 font-black text-xs shadow-lg transition active:scale-95"
+                className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-red-500 hover:from-amber-400 hover:to-red-400 text-slate-950 font-black text-xs shadow-lg transition active:scale-95 flex items-center justify-center gap-1.5"
               >
-                Accept ({challengeTimer}s)
+                <Swords className="w-4 h-4" />
+                Allow & Play ({challengeTimer}s)
               </button>
             </div>
           </div>

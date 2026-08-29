@@ -489,34 +489,20 @@ wss.on('connection', (ws: WebSocket) => {
           const roomId = customRoomId || `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           const initialBoard = createInitialBoard();
 
-          // Randomize Red vs Black
-          const isFromRed = Math.random() < 0.5;
-
+          // Challenger (fromUser) is Red (moves first), Opponent who accepts (toUser) is Black
           const redPlayer: GamePlayer = {
-            id: isFromRed ? challenge.fromUser.id : challenge.toUser.id,
-            username: isFromRed
-              ? challenge.fromUser.username
-              : challenge.toUser.username,
-            avatarId: isFromRed
-              ? challenge.fromUser.avatarId
-              : challenge.toUser.avatarId,
-            rating: isFromRed
-              ? challenge.fromUser.rating || 1200
-              : challenge.toUser.rating || 1200,
+            id: challenge.fromUser.id,
+            username: challenge.fromUser.username,
+            avatarId: challenge.fromUser.avatarId,
+            rating: challenge.fromUser.rating || challenge.fromUser.elo || 1200,
             color: 'red',
           };
 
           const blackPlayer: GamePlayer = {
-            id: isFromRed ? challenge.toUser.id : challenge.fromUser.id,
-            username: isFromRed
-              ? challenge.toUser.username
-              : challenge.fromUser.username,
-            avatarId: isFromRed
-              ? challenge.toUser.avatarId
-              : challenge.fromUser.avatarId,
-            rating: isFromRed
-              ? challenge.toUser.rating || 1200
-              : challenge.fromUser.rating || 1200,
+            id: challenge.toUser.id,
+            username: challenge.toUser.username,
+            avatarId: challenge.toUser.avatarId,
+            rating: challenge.toUser.rating || challenge.toUser.elo || 1200,
             color: 'black',
           };
 

@@ -546,21 +546,21 @@ export async function respondToChallengeInFirestore(
     }
 
     const roomId = existingRoomId || `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const isFromRed = Math.random() < 0.5;
 
+    // Challenger (fromUser) is Red (moves first), Opponent who accepts (toUser) is Black
     const redPlayer: GamePlayer = {
-      id: isFromRed ? fromUser.id : toUser.id,
-      username: isFromRed ? fromUser.username : toUser.username,
-      avatarId: isFromRed ? fromUser.avatarId : toUser.avatarId,
-      rating: isFromRed ? fromUser.rating || 1200 : toUser.rating || 1200,
+      id: fromUser.id,
+      username: fromUser.username,
+      avatarId: fromUser.avatarId,
+      rating: fromUser.rating || fromUser.elo || 1200,
       color: 'red',
     };
 
     const blackPlayer: GamePlayer = {
-      id: isFromRed ? toUser.id : fromUser.id,
-      username: isFromRed ? toUser.username : fromUser.username,
-      avatarId: isFromRed ? toUser.avatarId : fromUser.avatarId,
-      rating: isFromRed ? toUser.rating || 1200 : fromUser.rating || 1200,
+      id: toUser.id,
+      username: toUser.username,
+      avatarId: toUser.avatarId,
+      rating: toUser.rating || toUser.elo || 1200,
       color: 'black',
     };
 
