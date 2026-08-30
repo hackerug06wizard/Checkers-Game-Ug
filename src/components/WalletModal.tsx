@@ -44,6 +44,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [transactionsLoading, setTransactionsLoading] = useState<boolean>(false);
 
+  // In-app embedded Pesapal Checkout frame state
+  const [inAppCheckoutUrl, setInAppCheckoutUrl] = useState<string | null>(null);
+  const [activeOrderTrackingId, setActiveOrderTrackingId] = useState<string | null>(null);
+  const [activeMerchantRef, setActiveMerchantRef] = useState<string | null>(null);
+
   // Pesapal Configuration details
   const [pesapalConfig, setPesapalConfig] = useState<{ configured: boolean; environment: string; currency: string } | null>(null);
 
@@ -51,6 +56,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     if (isOpen) {
       fetchPesapalConfig();
       fetchTransactions();
+    } else {
+      setInAppCheckoutUrl(null);
+      setActiveOrderTrackingId(null);
+      setActiveMerchantRef(null);
     }
   }, [isOpen, currentUser.id]);
 
@@ -151,35 +160,36 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
       setStatusMessage({
         type: 'info',
-        text: 'Pesapal checkout prepared! Opening secure checkout...',
+        text: 'Pesapal secure checkout ready! Complete payment below.',
       });
 
-      // Open checkout in popup or modal window
-      const popup = window.open(
-        data.redirectUrl,
-        'PesapalCheckout',
-        'width=480,height=700,status=no,toolbar=no,menubar=no,location=no'
-      );
+      // Display in-app embedded Pesapal Checkout frame
+      if (data.redirectUrl) {
+        setInAppCheckoutUrl(data.redirectUrl);
+        setActiveOrderTrackingId(data.orderTrackingId || null);
+        setActiveMerchantRef(data.merchantReference || null);
+      }
 
-      // Listen for message from popup
-      const handlePopupMessage = async (e: MessageEvent) => {
-        if (e.data?.type === 'PESAPAL_PAYMENT_SUCCESS') {
-          window.removeEventListener('message', handlePopupMessage);
+      // Listen for message from iframe or popup
+      const handlePaymentMessage = async (e: MessageEvent) => {
+        if (e.data?.type === 'PESAPAL_PAYMENT_SUCCESS' || e.data?.status === 'COMPLETED') {
+          window.removeEventListener('message', handlePaymentMessage);
           await checkPaymentStatus(data.orderTrackingId, data.merchantReference);
         }
       };
-      window.addEventListener('message', handlePopupMessage);
+      window.addEventListener('message', handlePaymentMessage);
 
-      // Poll payment status every 4 seconds
+      // Poll payment status every 3 seconds while in-app checkout is active
       const interval = setInterval(async () => {
         const isDone = await checkPaymentStatus(data.orderTrackingId, data.merchantReference);
         if (isDone) {
           clearInterval(interval);
-          window.removeEventListener('message', handlePopupMessage);
+          window.removeEventListener('message', handlePaymentMessage);
+          setInAppCheckoutUrl(null);
         }
-      }, 4000);
+      }, 3000);
 
-      setTimeout(() => clearInterval(interval), 120000); // 2 minute timeout
+      setTimeout(() => clearInterval(interval), 180000); // 3 minute timeout
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message || 'Deposit initiation failed. Please try again.' });
     } finally {
@@ -407,129 +417,177 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         {/* Tab 1: Pesapal Deposit */}
         {activeTab === 'deposit' && (
           <div className="space-y-3.5 overflow-y-auto custom-scrollbar flex-1 pr-1">
-            <div className="space-y-1.5">
-              <label className="text-xs font-black text-slate-300 flex items-center justify-between">
-                <span>Select Stake Deposit Amount (UGX)</span>
-                <span className="text-[10px] text-amber-400">Match Lobby Stakes</span>
-              </label>
-
-              {/* Preset Stakes buttons: 500, 1000, 2000, 5000, 10000, 20000 */}
-              <div className="grid grid-cols-3 gap-2">
-                {STAKE_TIERS.map((tier) => (
+            {inAppCheckoutUrl ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-amber-500/40">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-xs font-black text-amber-300">
+                      In-App Pesapal Payment Checkout
+                    </span>
+                  </div>
                   <button
-                    key={tier.amount}
-                    type="button"
                     onClick={() => {
-                      setDepositAmount(tier.amount);
-                      setCustomAmount('');
+                      setInAppCheckoutUrl(null);
+                      if (activeOrderTrackingId || activeMerchantRef) {
+                        checkPaymentStatus(activeOrderTrackingId || undefined, activeMerchantRef || undefined);
+                      }
                     }}
-                    className={`py-2 px-2 rounded-xl text-xs font-black border transition flex flex-col items-center justify-center ${
-                      effectiveDepositAmount === tier.amount && !customAmount
-                        ? 'bg-amber-500/20 border-amber-400 text-amber-300 shadow'
-                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                    }`}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-bold transition cursor-pointer"
                   >
-                    <span>{tier.label}</span>
-                    <span className="text-[9px] text-slate-500 font-semibold">{tier.category}</span>
+                    Done / Close Frame
                   </button>
-                ))}
+                </div>
+
+                <div className="relative w-full h-[420px] rounded-2xl overflow-hidden border border-slate-700 bg-slate-950 shadow-inner">
+                  <iframe
+                    src={inAppCheckoutUrl}
+                    title="Pesapal Checkout"
+                    className="w-full h-full border-0"
+                    allow="payment *; clipboard-write *"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between text-xs pt-1">
+                  <span className="text-[11px] text-slate-400">
+                    Auto-checking payment approval every 3s...
+                  </span>
+                  <button
+                    onClick={() => checkPaymentStatus(activeOrderTrackingId || undefined, activeMerchantRef || undefined)}
+                    className="text-amber-400 hover:underline font-bold text-xs flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Check Status</span>
+                  </button>
+                </div>
               </div>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-black text-slate-300 flex items-center justify-between">
+                    <span>Select Stake Deposit Amount (UGX)</span>
+                    <span className="text-[10px] text-amber-400">Match Lobby Stakes</span>
+                  </label>
 
-              {/* Custom Amount Input */}
-              <div className="pt-1">
-                <input
-                  type="number"
-                  placeholder="Or enter custom amount (e.g. 50000)"
-                  value={customAmount}
-                  onChange={(e) => setCustomAmount(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs font-bold focus:outline-none focus:border-amber-400"
-                />
-              </div>
-            </div>
+                  {/* Preset Stakes buttons: 500, 1000, 2000, 5000, 10000, 20000 */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {STAKE_TIERS.map((tier) => (
+                      <button
+                        key={tier.amount}
+                        type="button"
+                        onClick={() => {
+                          setDepositAmount(tier.amount);
+                          setCustomAmount('');
+                        }}
+                        className={`py-2 px-2 rounded-xl text-xs font-black border transition flex flex-col items-center justify-center cursor-pointer ${
+                          effectiveDepositAmount === tier.amount && !customAmount
+                            ? 'bg-amber-500/20 border-amber-400 text-amber-300 shadow'
+                            : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <span>{tier.label}</span>
+                        <span className="text-[9px] text-slate-500 font-semibold">{tier.category}</span>
+                      </button>
+                    ))}
+                  </div>
 
-            {/* Payment Method / Provider */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-black text-slate-300">Payment Method via Pesapal</label>
-              <div className="grid grid-cols-3 gap-2">
+                  {/* Custom Amount Input */}
+                  <div className="pt-1">
+                    <input
+                      type="number"
+                      placeholder="Or enter custom amount (e.g. 50000)"
+                      value={customAmount}
+                      onChange={(e) => setCustomAmount(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs font-bold focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </div>
+
+                {/* Payment Method / Provider */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-black text-slate-300">Payment Method via Pesapal</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setProvider('mtn')}
+                      className={`py-2 px-2 rounded-xl text-xs font-bold border transition flex flex-col items-center gap-1 cursor-pointer ${
+                        provider === 'mtn'
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <Phone className="w-3.5 h-3.5 text-amber-400" />
+                      <span>MTN MoMo</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setProvider('airtel')}
+                      className={`py-2 px-2 rounded-xl text-xs font-bold border transition flex flex-col items-center gap-1 cursor-pointer ${
+                        provider === 'airtel'
+                          ? 'bg-rose-500/20 border-rose-400 text-rose-300'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <Phone className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Airtel Money</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setProvider('card')}
+                      className={`py-2 px-2 rounded-xl text-xs font-bold border transition flex flex-col items-center gap-1 cursor-pointer ${
+                        provider === 'card'
+                          ? 'bg-sky-500/20 border-sky-400 text-sky-300'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <CreditCard className="w-3.5 h-3.5 text-sky-400" />
+                      <span>Visa/Mastercard</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Mobile Money Phone Input */}
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-300">
+                    Phone Number (for Mobile Money Prompt)
+                  </label>
+                  <input
+                    type="tel"
+                    placeholder="e.g. 0771234567 or +256701234567"
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs font-bold focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                {/* Submit Pesapal Deposit */}
                 <button
-                  type="button"
-                  onClick={() => setProvider('mtn')}
-                  className={`py-2 px-2 rounded-xl text-xs font-bold border transition flex flex-col items-center gap-1 ${
-                    provider === 'mtn'
-                      ? 'bg-amber-500/20 border-amber-400 text-amber-300'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                  }`}
+                  onClick={handleInitiateDeposit}
+                  disabled={loading || effectiveDepositAmount < 500}
+                  className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-red-600 hover:from-amber-400 hover:to-red-500 text-slate-950 font-black text-xs shadow-lg transition active:scale-98 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
                 >
-                  <Phone className="w-3.5 h-3.5 text-amber-400" />
-                  <span>MTN MoMo</span>
+                  <Wallet className="w-4 h-4" />
+                  <span>
+                    {loading
+                      ? 'Connecting to Pesapal...'
+                      : `Pay ${effectiveDepositAmount.toLocaleString()} UGX with Pesapal`}
+                  </span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setProvider('airtel')}
-                  className={`py-2 px-2 rounded-xl text-xs font-bold border transition flex flex-col items-center gap-1 ${
-                    provider === 'airtel'
-                      ? 'bg-rose-500/20 border-rose-400 text-rose-300'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                  }`}
-                >
-                  <Phone className="w-3.5 h-3.5 text-rose-400" />
-                  <span>Airtel Money</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setProvider('card')}
-                  className={`py-2 px-2 rounded-xl text-xs font-bold border transition flex flex-col items-center gap-1 ${
-                    provider === 'card'
-                      ? 'bg-sky-500/20 border-sky-400 text-sky-300'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                  }`}
-                >
-                  <CreditCard className="w-3.5 h-3.5 text-sky-400" />
-                  <span>Visa/Mastercard</span>
-                </button>
-              </div>
-            </div>
 
-            {/* Mobile Money Phone Input */}
-            <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-300">
-                Phone Number (for Mobile Money Prompt)
-              </label>
-              <input
-                type="tel"
-                placeholder="e.g. 0771234567 or +256701234567"
-                value={phoneNumber}
-                onChange={(e) => setPhoneNumber(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs font-bold focus:outline-none focus:border-amber-400"
-              />
-            </div>
-
-            {/* Submit Pesapal Deposit */}
-            <button
-              onClick={handleInitiateDeposit}
-              disabled={loading || effectiveDepositAmount < 500}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-red-600 hover:from-amber-400 hover:to-red-500 text-slate-950 font-black text-xs shadow-lg transition active:scale-98 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
-            >
-              <Wallet className="w-4 h-4" />
-              <span>
-                {loading
-                  ? 'Connecting to Pesapal...'
-                  : `Pay ${effectiveDepositAmount.toLocaleString()} UGX with Pesapal`}
-              </span>
-            </button>
-
-            {/* Sandbox Quick Practice Top-up */}
-            <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
-              <span className="text-slate-400 text-[11px]">Testing Arena?</span>
-              <button
-                onClick={() => handleTestCredit(10000)}
-                disabled={loading}
-                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold text-[11px] border border-slate-700 transition flex items-center gap-1 cursor-pointer"
-              >
-                <Sparkles className="w-3 h-3" />
-                <span>+10,000 UGX Sandbox Credit</span>
-              </button>
-            </div>
+                {/* Sandbox Quick Practice Top-up */}
+                <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
+                  <span className="text-slate-400 text-[11px]">Testing Arena?</span>
+                  <button
+                    onClick={() => handleTestCredit(10000)}
+                    disabled={loading}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold text-[11px] border border-slate-700 transition flex items-center gap-1 cursor-pointer"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>+10,000 UGX Sandbox Credit</span>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
