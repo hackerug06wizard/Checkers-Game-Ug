@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Coins,
   ShieldCheck,
+  Clock,
 } from 'lucide-react';
 
 interface WalletModalProps {
@@ -419,45 +420,73 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           <div className="space-y-3.5 overflow-y-auto custom-scrollbar flex-1 pr-1">
             {inAppCheckoutUrl ? (
               <div className="space-y-3">
-                <div className="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-amber-500/40">
+                {/* Header & Controls */}
+                <div className="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-amber-500/40 shadow-md">
                   <div className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
                     <span className="text-xs font-black text-amber-300">
-                      In-App Pesapal Payment Checkout
+                      Pesapal Mobile Money Gateway
                     </span>
                   </div>
-                  <button
-                    onClick={() => {
-                      setInAppCheckoutUrl(null);
-                      if (activeOrderTrackingId || activeMerchantRef) {
-                        checkPaymentStatus(activeOrderTrackingId || undefined, activeMerchantRef || undefined);
-                      }
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-bold transition cursor-pointer"
-                  >
-                    Done / Close Frame
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => window.open(inAppCheckoutUrl, '_blank')}
+                      className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-[11px] font-bold border border-amber-500/40 transition cursor-pointer flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Open in Browser</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setInAppCheckoutUrl(null);
+                        if (activeOrderTrackingId || activeMerchantRef) {
+                          checkPaymentStatus(activeOrderTrackingId || undefined, activeMerchantRef || undefined);
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-bold transition cursor-pointer"
+                    >
+                      Done / Close
+                    </button>
+                  </div>
                 </div>
 
-                <div className="relative w-full h-[420px] rounded-2xl overflow-hidden border border-slate-700 bg-slate-950 shadow-inner">
+                {/* Important Step-by-Step Instructions Banner */}
+                <div className="bg-gradient-to-r from-amber-950/60 to-slate-950 border border-amber-500/30 rounded-xl p-3 text-xs space-y-1.5 text-slate-200 shadow">
+                  <div className="flex items-center gap-1.5 text-amber-400 font-black text-xs">
+                    <Phone className="w-3.5 h-3.5" />
+                    <span>How to receive the PIN prompt on your phone:</span>
+                  </div>
+                  <ol className="list-decimal list-inside text-[11px] text-slate-300 space-y-1 font-medium pl-1">
+                    <li>Select <strong className="text-amber-300">MTN Mobile Money</strong> or <strong className="text-rose-300">Airtel Money</strong> inside the frame below.</li>
+                    <li>Enter or confirm your phone number and tap <strong className="text-emerald-400">Pay / Proceed</strong>.</li>
+                    <li>Look at your phone screen for the <strong className="text-white">USSD PIN Prompt</strong> and enter your PIN.</li>
+                    <li>Your wallet will be credited automatically once confirmed!</li>
+                  </ol>
+                </div>
+
+                {/* Embedded Checkout Frame */}
+                <div className="relative w-full h-[500px] sm:h-[540px] rounded-2xl overflow-hidden border-2 border-slate-700 bg-white shadow-2xl">
                   <iframe
                     src={inAppCheckoutUrl}
-                    title="Pesapal Checkout"
-                    className="w-full h-full border-0"
+                    title="Pesapal Payment Gateway"
+                    className="w-full h-full border-0 bg-white"
                     allow="payment *; clipboard-write *"
+                    sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-top-navigation-by-user-activation allow-modals"
                   />
                 </div>
 
-                <div className="flex items-center justify-between text-xs pt-1">
-                  <span className="text-[11px] text-slate-400">
-                    Auto-checking payment approval every 3s...
-                  </span>
+                {/* Live Polling Status & Actions */}
+                <div className="flex items-center justify-between bg-slate-950/80 p-2 rounded-xl border border-slate-800 text-xs">
+                  <div className="flex items-center gap-1.5 text-slate-400 text-[11px]">
+                    <Clock className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                    <span>Listening for payment confirmation...</span>
+                  </div>
                   <button
                     onClick={() => checkPaymentStatus(activeOrderTrackingId || undefined, activeMerchantRef || undefined)}
-                    className="text-amber-400 hover:underline font-bold text-xs flex items-center gap-1 cursor-pointer"
+                    className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
                   >
                     <RefreshCw className="w-3 h-3" />
-                    <span>Check Status</span>
+                    <span>I have entered my PIN</span>
                   </button>
                 </div>
               </div>
