@@ -196,8 +196,10 @@ export interface GameRoom {
   winReason?: string;
   createdAt: number;
   lastMoveTimestamp: number;
-  turnTimeLimitSeconds: number; // e.g. 45 seconds per turn
+  turnTimeLimitSeconds: number; // e.g. 15 seconds per turn
   turnDeadline: number | null;
+  disconnectedPlayerId?: string | null;
+  disconnectDeadline?: number | null;
   spectatorsCount: number;
   isPrivate?: boolean;
   isBotGame?: boolean;

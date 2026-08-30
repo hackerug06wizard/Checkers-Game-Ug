@@ -45,6 +45,7 @@ interface GameRoomProps {
   onResign: () => void;
   onLeaveRoom: () => void;
   onDeleteTable?: () => void;
+  onClaimTimeout?: () => void;
   onSendGameChat: (text: string) => void;
   gameChatMessages: ChatMessage[];
 }
@@ -57,11 +58,12 @@ export const GameRoom: React.FC<GameRoomProps> = ({
   onResign,
   onLeaveRoom,
   onDeleteTable,
+  onClaimTimeout,
   onSendGameChat,
   gameChatMessages,
 }) => {
   const [selectedPos, setSelectedPos] = useState<Position | null>(null);
-  const [timeLeft, setTimeLeft] = useState<number>(room.turnTimeLimitSeconds || 900);
+  const [timeLeft, setTimeLeft] = useState<number>(room.turnTimeLimitSeconds || 15);
   const [latestEmojiReaction, setLatestEmojiReaction] = useState<{
     emoji: string;
     sender: string;
@@ -71,14 +73,17 @@ export const GameRoom: React.FC<GameRoomProps> = ({
   const [moveNotification, setMoveNotification] = useState<string | null>(null);
 
   const prevHistoryLenRef = useRef<number>(room.history?.length || 0);
-  const warned30Ref = useRef<boolean>(false);
   const warned15Ref = useRef<boolean>(false);
+  const warned5Ref = useRef<boolean>(false);
 
   const isBotGame = Boolean(room.blackPlayer?.isBot || room.id.includes('bot'));
   const botDiffConfig = room.botDifficulty ? BOT_DIFFICULTIES[room.botDifficulty] : BOT_DIFFICULTIES.medium;
 
-  // Format seconds into MM:SS
+  // Format seconds into MM:SS or seconds
   const formatTime = (seconds: number) => {
+    if (seconds <= 60) {
+      return `${seconds}s`;
+    }
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
@@ -99,6 +104,14 @@ export const GameRoom: React.FC<GameRoomProps> = ({
   const opponent = isRed ? room.blackPlayer : room.redPlayer;
   const opponentColor: PieceColor = isRed ? 'black' : 'red';
   const myColor: PieceColor = isRed ? 'red' : 'black';
+
+  // Opponent disconnection status
+  const isOpponentDisconnected = Boolean(
+    room.disconnectedPlayerId && opponent && room.disconnectedPlayerId === opponent.id
+  );
+  const isMeDisconnected = Boolean(
+    room.disconnectedPlayerId && room.disconnectedPlayerId === currentUser.id
+  );
 
   // Compute all valid move options for current turn player (enforcing mandatory jumps)
   const validMoveOptions = useMemo(() => {
@@ -121,11 +134,11 @@ export const GameRoom: React.FC<GameRoomProps> = ({
 
   // Reset audio warning flags when turn or deadline resets
   useEffect(() => {
-    warned30Ref.current = false;
     warned15Ref.current = false;
+    warned5Ref.current = false;
   }, [room.currentTurn, room.turnDeadline]);
 
-  // Turn Countdown Timer effect (15 minutes turn timer with low-time notifications)
+  // Turn Countdown Timer effect (15-second per-turn countdown with low-time chime)
   useEffect(() => {
     if (room.status !== 'playing' || !room.turnDeadline) return;
 
@@ -135,23 +148,28 @@ export const GameRoom: React.FC<GameRoomProps> = ({
       setTimeLeft(diff);
 
       // Low time audio chime notifications
-      if (diff <= 30 && diff > 25 && !warned30Ref.current) {
-        warned30Ref.current = true;
-        sounds.playTimeWarning();
-      }
-      if (diff <= 15 && diff > 10 && !warned15Ref.current) {
+      if (diff <= 10 && diff > 5 && !warned15Ref.current) {
         warned15Ref.current = true;
         sounds.playTimeWarning();
       }
-      if (diff <= 10 && diff > 0 && isMyTurn) {
+      if (diff <= 5 && diff > 0 && !warned5Ref.current) {
+        warned5Ref.current = true;
+        sounds.playTimeWarning();
+      }
+      if (diff <= 5 && diff > 0 && (isMyTurn || isOpponentDisconnected)) {
         sounds.playTick();
+      }
+
+      // Auto trigger claim timeout if opponent's turn hits 0
+      if (diff === 0 && !isMyTurn && playerColor !== 'spectator') {
+        onClaimTimeout?.();
       }
     };
 
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [room.turnDeadline, room.status, isMyTurn]);
+  }, [room.turnDeadline, room.status, isMyTurn, isOpponentDisconnected, playerColor, onClaimTimeout]);
 
   // Audio feedback and notifications when moves are executed
   useEffect(() => {
@@ -376,8 +394,8 @@ export const GameRoom: React.FC<GameRoomProps> = ({
 
         {/* VS / Turn Timer Info */}
         <div className="flex items-center gap-1.5 text-amber-400 font-mono text-[10px] sm:text-xs">
-          <Clock className="w-3 h-3" />
-          <span>15 Min Timer</span>
+          <Clock className="w-3 h-3 text-amber-400 animate-pulse" />
+          <span>15s Turn Clock</span>
         </div>
 
         {/* Black Player (2nd to Move) */}
@@ -391,8 +409,27 @@ export const GameRoom: React.FC<GameRoomProps> = ({
         </div>
       </div>
 
-      {/* CRITICAL LOW-TIME WARNING BANNER */}
-      {isLowTime && (
+      {/* DISCONNECTION / NO INTERNET 15-SECOND COUNTDOWN WARNING BANNER */}
+      {isOpponentDisconnected && room.status === 'playing' && (
+        <div className="bg-gradient-to-r from-amber-600 via-rose-600 to-amber-600 text-white font-black text-xs py-1.5 px-3 rounded-xl shadow-lg border border-amber-400 flex items-center justify-center gap-2 animate-bounce shrink-0 z-30">
+          <AlertTriangle className="w-4 h-4 text-amber-200 animate-spin" />
+          <span>
+            ⚠️ OPPONENT DISCONNECTED: 15s Countdown ({formatTime(timeLeft)}) to Victory! If they don't play, you win!
+          </span>
+        </div>
+      )}
+
+      {isMeDisconnected && room.status === 'playing' && (
+        <div className="bg-rose-700 text-white font-black text-xs py-1.5 px-3 rounded-xl shadow-lg border border-rose-400 flex items-center justify-center gap-2 animate-pulse shrink-0 z-30">
+          <AlertTriangle className="w-4 h-4 text-rose-200" />
+          <span>
+            ⚠️ CONNECTION LOST: Reconnect and make a move within {formatTime(timeLeft)} or match will be forfeited!
+          </span>
+        </div>
+      )}
+
+      {/* CRITICAL LOW-TIME WARNING BANNER (15s Turn limit) */}
+      {!isOpponentDisconnected && !isMeDisconnected && isLowTime && (
         <div className="bg-rose-600 text-white font-black text-xs py-1 px-3 rounded-xl shadow-lg border border-rose-400 flex items-center justify-center gap-2 animate-bounce shrink-0 z-30">
           <AlertTriangle className="w-4 h-4" />
           <span>
@@ -540,6 +577,73 @@ export const GameRoom: React.FC<GameRoomProps> = ({
                     <span>Delete Table</span>
                   </button>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* Match Ended / Victory / Timeout Overlay */}
+          {room.status === 'ended' && (
+            <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 z-40 animate-fade-in">
+              <div className="bg-slate-900 border-2 border-amber-500/90 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl relative overflow-hidden">
+                <div
+                  className={`w-16 h-16 rounded-2xl mx-auto flex items-center justify-center shadow-xl ${
+                    room.winner === playerColor
+                      ? 'bg-gradient-to-tr from-amber-400 to-amber-600 text-slate-950 shadow-amber-500/30'
+                      : room.winner === 'draw'
+                      ? 'bg-slate-800 text-slate-300 border border-slate-700'
+                      : 'bg-rose-950 border border-rose-700 text-rose-300'
+                  }`}
+                >
+                  {room.winner === playerColor ? (
+                    <Trophy className="w-8 h-8 font-black animate-bounce" />
+                  ) : room.winner === 'draw' ? (
+                    <Clock className="w-8 h-8 text-slate-300" />
+                  ) : (
+                    <Crown className="w-8 h-8 text-amber-400" />
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <h3 className="text-xl font-black text-white">
+                    {room.winner === playerColor
+                      ? '🎉 VICTORY!'
+                      : room.winner === 'draw'
+                      ? '🤝 MATCH DRAW'
+                      : 'MATCH COMPLETED'}
+                  </h3>
+                  <p className="text-xs text-amber-300 font-bold leading-relaxed px-2">
+                    {room.winReason ||
+                      (room.winner === playerColor
+                        ? 'Congratulations! You won the checkers match.'
+                        : room.winner
+                        ? `${room.winner.toUpperCase()} player won the match.`
+                        : 'Game concluded.')}
+                  </p>
+                </div>
+
+                {/* Pot or Stakes Details */}
+                {(room.stakeAmount || 0) > 0 && (
+                  <div className="p-3 rounded-2xl bg-amber-950/50 border border-amber-500/40 text-center space-y-1">
+                    <span className="text-[11px] font-bold text-amber-300">
+                      {room.winner === playerColor
+                        ? '💰 Pot Prize Credited to Your Wallet:'
+                        : '💰 Match Pot:'}
+                    </span>
+                    <div className="text-lg font-black text-emerald-400">
+                      +{(room.potAmount || (room.stakeAmount || 0) * 2).toLocaleString()} UGX
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    onClick={onLeaveRoom}
+                    className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-red-600 hover:from-amber-400 hover:to-red-500 text-slate-950 font-black text-xs shadow-lg transition active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    <span>Return to Lobby</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}

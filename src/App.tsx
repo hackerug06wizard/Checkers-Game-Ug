@@ -1148,6 +1148,29 @@ export default function App() {
     }
   };
 
+  const handleClaimTimeout = () => {
+    if (!activeRoom) return;
+    sendWs('game:claim_timeout', { roomId: activeRoom.id });
+
+    // Also update locally for instant responsiveness
+    if (activeRoom.status === 'playing') {
+      const myColor = activeRoom.redPlayer?.id === currentUser?.id ? 'red' : 'black';
+      const winner = activeRoom.currentTurn === 'red' ? 'black' : 'red';
+      recordGameOutcome(myColor, winner);
+
+      setActiveRoom((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          status: 'ended',
+          winner,
+          winReason: 'Opponent did not make a move in 15 seconds (Forfeit)',
+        };
+      });
+      showNotification('Opponent turn timer expired (15s)! Match won.', 'info');
+    }
+  };
+
   const handleResign = () => {
     if (!activeRoom) return;
     sendWs('game:resign', { roomId: activeRoom.id });
@@ -1334,6 +1357,7 @@ export default function App() {
             onResign={handleResign}
             onLeaveRoom={handleLeaveRoom}
             onDeleteTable={() => handleDeleteGameRoom(activeRoom.id)}
+            onClaimTimeout={handleClaimTimeout}
             onSendGameChat={handleSendGameChat}
             gameChatMessages={gameChatMessages}
           />

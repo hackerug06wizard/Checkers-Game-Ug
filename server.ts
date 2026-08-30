@@ -883,8 +883,8 @@ wss.on('connection', (ws: WebSocket) => {
                   winner: null,
                   createdAt: Date.now(),
                   lastMoveTimestamp: Date.now(),
-                  turnTimeLimitSeconds: 900,
-                  turnDeadline: Date.now() + 900000,
+                  turnTimeLimitSeconds: 15,
+                  turnDeadline: Date.now() + 15000,
                   spectatorsCount: 0,
                   isBotGame: true,
                   botDifficulty: 'medium',
@@ -1001,8 +1001,8 @@ wss.on('connection', (ws: WebSocket) => {
             winner: null,
             createdAt: Date.now(),
             lastMoveTimestamp: Date.now(),
-            turnTimeLimitSeconds: 900,
-            turnDeadline: Date.now() + 900000,
+            turnTimeLimitSeconds: 15,
+            turnDeadline: Date.now() + 15000,
             spectatorsCount: 0,
           };
 
@@ -1092,8 +1092,8 @@ wss.on('connection', (ws: WebSocket) => {
             winner: null,
             createdAt: Date.now(),
             lastMoveTimestamp: Date.now(),
-            turnTimeLimitSeconds: timeLimit || 900,
-            turnDeadline: Date.now() + (timeLimit || 900) * 1000,
+            turnTimeLimitSeconds: 15,
+            turnDeadline: Date.now() + 15000,
             spectatorsCount: 0,
           };
 
@@ -1146,7 +1146,8 @@ wss.on('connection', (ws: WebSocket) => {
               color: 'black',
             };
             room.status = 'playing';
-            room.turnDeadline = Date.now() + room.turnTimeLimitSeconds * 1000;
+            room.turnTimeLimitSeconds = 15;
+            room.turnDeadline = Date.now() + 15000;
             user.status = 'in-game';
 
             broadcastPresence();
@@ -1233,7 +1234,10 @@ wss.on('connection', (ws: WebSocket) => {
           const nextTurn: PieceColor = isRedTurn ? 'black' : 'red';
           room.currentTurn = nextTurn;
           room.lastMoveTimestamp = Date.now();
-          room.turnDeadline = Date.now() + room.turnTimeLimitSeconds * 1000;
+          room.turnTimeLimitSeconds = 15;
+          room.turnDeadline = Date.now() + 15000;
+          room.disconnectedPlayerId = null;
+          room.disconnectDeadline = null;
 
           // Check win condition
           const gameOver = checkGameOver(room.board, nextTurn);
@@ -1256,6 +1260,37 @@ wss.on('connection', (ws: WebSocket) => {
             setTimeout(() => {
               executeBotTurn(room);
             }, 600);
+          }
+          break;
+        }
+
+        case 'game:claim_timeout': {
+          if (!currentUserId) return;
+          const { roomId } = payload;
+          const room = activeRooms.get(roomId);
+          if (!room || room.status !== 'playing') return;
+
+          const isRed = room.redPlayer?.id === currentUserId;
+          const isBlack = room.blackPlayer?.id === currentUserId;
+          if (!isRed && !isBlack) return;
+
+          const myColor: PieceColor = isRed ? 'red' : 'black';
+          const opponentColor: PieceColor = isRed ? 'black' : 'red';
+          const opponentPlayer = isRed ? room.blackPlayer : room.redPlayer;
+          const myPlayer = isRed ? room.redPlayer : room.blackPlayer;
+
+          // Check if it was opponent's turn and 15s deadline expired
+          if (
+            room.currentTurn === opponentColor &&
+            room.turnDeadline &&
+            Date.now() >= room.turnDeadline - 1000
+          ) {
+            room.status = 'ended';
+            room.winner = myColor;
+            room.winReason = `${opponentPlayer?.username || 'Opponent'} timed out / disconnected (15-second countdown expired). ${myPlayer?.username || 'You'} won!`;
+            handleGameEnd(room);
+            broadcastToRoom(room, 'game:updated', room);
+            broadcast('lobby:rooms', Array.from(activeRooms.values()));
           }
           break;
         }
@@ -1402,10 +1437,64 @@ wss.on('connection', (ws: WebSocket) => {
       if (user) {
         user.status = 'away';
       }
+
+      // Check all active games this user is in
+      for (const room of activeRooms.values()) {
+        if (room.status === 'playing') {
+          const isRed = room.redPlayer?.id === currentUserId;
+          const isBlack = room.blackPlayer?.id === currentUserId;
+          if (isRed || isBlack) {
+            const playerColor = isRed ? 'red' : 'black';
+            room.disconnectedPlayerId = currentUserId;
+            room.disconnectDeadline = Date.now() + 15000;
+            if (room.currentTurn === playerColor) {
+              // Immediately start or cap the 15-second forfeit countdown
+              room.turnDeadline = Date.now() + 15000;
+            }
+            broadcastToRoom(room, 'game:updated', room);
+          }
+        }
+      }
+
       broadcastPresence();
     }
   });
 });
+
+// Auto-check for 15-second turn timeouts & internet disconnect forfeits every 1 second
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomId, room] of activeRooms.entries()) {
+    if (room.status !== 'playing') continue;
+
+    const currentTurnColor = room.currentTurn;
+    const activePlayer = currentTurnColor === 'red' ? room.redPlayer : room.blackPlayer;
+    const opponentPlayer = currentTurnColor === 'red' ? room.blackPlayer : room.redPlayer;
+    const opponentColor = currentTurnColor === 'red' ? 'black' : 'red';
+
+    if (!activePlayer || activePlayer.isBot) continue;
+
+    // Check if player disconnected or exceeded 15s turn timer
+    const isDeadlineReached = !!room.turnDeadline && now >= room.turnDeadline;
+    const isDisconnectExpired =
+      room.disconnectedPlayerId === activePlayer.id &&
+      !!room.disconnectDeadline &&
+      now >= room.disconnectDeadline;
+
+    if (isDeadlineReached || isDisconnectExpired) {
+      room.status = 'ended';
+      room.winner = opponentColor;
+      const isDisconnected = room.disconnectedPlayerId === activePlayer.id;
+      room.winReason = isDisconnected
+        ? `${activePlayer.username} lost internet connection / disconnected. ${opponentPlayer?.username || 'Opponent'} wins (15s limit)!`
+        : `${activePlayer.username} did not move in 15 seconds. ${opponentPlayer?.username || 'Opponent'} wins by timeout!`;
+
+      handleGameEnd(room);
+      broadcastToRoom(room, 'game:updated', room);
+      broadcast('lobby:rooms', Array.from(activeRooms.values()));
+    }
+  }
+}, 1000);
 
 // Helper: Execute AI Bot move
 function executeBotTurn(room: GameRoom) {
