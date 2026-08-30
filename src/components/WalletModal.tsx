@@ -428,62 +428,72 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       Pesapal Mobile Money Gateway
                     </span>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => window.open(inAppCheckoutUrl, '_blank')}
-                      className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-[11px] font-bold border border-amber-500/40 transition cursor-pointer flex items-center gap-1"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      <span>Open in Browser</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setInAppCheckoutUrl(null);
-                        if (activeOrderTrackingId || activeMerchantRef) {
-                          checkPaymentStatus(activeOrderTrackingId || undefined, activeMerchantRef || undefined);
-                        }
-                      }}
-                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-bold transition cursor-pointer"
-                    >
-                      Done / Close
-                    </button>
-                  </div>
+                  <button
+                    onClick={() => {
+                      setInAppCheckoutUrl(null);
+                      if (activeOrderTrackingId || activeMerchantRef) {
+                        checkPaymentStatus(activeOrderTrackingId || undefined, activeMerchantRef || undefined);
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-bold transition cursor-pointer"
+                  >
+                    Close Frame
+                  </button>
                 </div>
 
-                {/* Important Step-by-Step Instructions Banner */}
-                <div className="bg-gradient-to-r from-amber-950/60 to-slate-950 border border-amber-500/30 rounded-xl p-3 text-xs space-y-1.5 text-slate-200 shadow">
-                  <div className="flex items-center gap-1.5 text-amber-400 font-black text-xs">
-                    <Phone className="w-3.5 h-3.5" />
-                    <span>How to receive the PIN prompt on your phone:</span>
+                {/* Big Action Button for Mobile Devices */}
+                <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/20 to-red-500/10 border border-amber-500/40 rounded-2xl p-3.5 space-y-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
+                      <Phone className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-black text-white">
+                        Why hasn't the PIN prompt appeared on your phone yet?
+                      </h4>
+                      <p className="text-[11px] text-slate-300 leading-relaxed mt-0.5">
+                        Pesapal requires you to <strong>confirm your network (MTN or Airtel) and tap "Pay"</strong> in the Pesapal window before telecom sends the USSD PIN prompt to your screen.
+                      </p>
+                    </div>
                   </div>
-                  <ol className="list-decimal list-inside text-[11px] text-slate-300 space-y-1 font-medium pl-1">
-                    <li>Select <strong className="text-amber-300">MTN Mobile Money</strong> or <strong className="text-rose-300">Airtel Money</strong> inside the frame below.</li>
-                    <li>Enter or confirm your phone number and tap <strong className="text-emerald-400">Pay / Proceed</strong>.</li>
-                    <li>Look at your phone screen for the <strong className="text-white">USSD PIN Prompt</strong> and enter your PIN.</li>
-                    <li>Your wallet will be credited automatically once confirmed!</li>
-                  </ol>
+
+                  <a
+                    href={inAppCheckoutUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black text-xs shadow-lg transition flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                  >
+                    <ExternalLink className="w-4 h-4 text-slate-950" />
+                    <span>Launch Pesapal Gateway to Send Phone Prompt</span>
+                  </a>
                 </div>
 
                 {/* Embedded Checkout Frame */}
-                <div className="relative w-full h-[500px] sm:h-[540px] rounded-2xl overflow-hidden border-2 border-slate-700 bg-white shadow-2xl">
-                  <iframe
-                    src={inAppCheckoutUrl}
-                    title="Pesapal Payment Gateway"
-                    className="w-full h-full border-0 bg-white"
-                    allow="payment *; clipboard-write *"
-                    sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-top-navigation-by-user-activation allow-modals"
-                  />
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 px-1 font-semibold">
+                    <span>Or complete payment inside the frame below:</span>
+                    <span className="text-emerald-400">256-bit Encrypted</span>
+                  </div>
+                  <div className="relative w-full h-[460px] sm:h-[500px] rounded-2xl overflow-hidden border-2 border-slate-700 bg-white shadow-2xl">
+                    <iframe
+                      src={inAppCheckoutUrl}
+                      title="Pesapal Payment Gateway"
+                      className="w-full h-full border-0 bg-white"
+                      allow="payment *; clipboard-write *"
+                      sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-top-navigation-by-user-activation allow-modals"
+                    />
+                  </div>
                 </div>
 
                 {/* Live Polling Status & Actions */}
-                <div className="flex items-center justify-between bg-slate-950/80 p-2 rounded-xl border border-slate-800 text-xs">
+                <div className="flex items-center justify-between bg-slate-950/90 p-2.5 rounded-xl border border-slate-800 text-xs">
                   <div className="flex items-center gap-1.5 text-slate-400 text-[11px]">
                     <Clock className="w-3.5 h-3.5 text-amber-400 animate-spin" />
-                    <span>Listening for payment confirmation...</span>
+                    <span>Waiting for your PIN approval...</span>
                   </div>
                   <button
                     onClick={() => checkPaymentStatus(activeOrderTrackingId || undefined, activeMerchantRef || undefined)}
-                    className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
                   >
                     <RefreshCw className="w-3 h-3" />
                     <span>I have entered my PIN</span>
