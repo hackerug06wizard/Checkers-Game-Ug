@@ -145,8 +145,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       });
 
       const data = res.data;
-      if (!res.ok || !data.success || !data.redirectUrl) {
-        throw new Error(data.message || 'Failed to initialize Pesapal checkout.');
+      if (!res.ok || !data || !data.success || !data.redirectUrl) {
+        throw new Error(data?.message || 'Failed to initialize Pesapal checkout.');
       }
 
       setPesapalIframeUrl(data.redirectUrl);
@@ -165,7 +165,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         }
       }, 3000);
     } catch (err: any) {
-      setStatusMessage({ type: 'error', text: err.message || 'Payment initialization failed.' });
+      console.error('Pesapal initiation error:', err);
+      setStatusMessage({ type: 'error', text: err.message || 'Payment initialization failed. Please try again.' });
     } finally {
       setLoading(false);
     }
