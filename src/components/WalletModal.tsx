@@ -154,7 +154,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       setActiveMerchantRef(data.merchantReference || null);
       setStatusMessage(null);
 
-      // Start automatic background verification polling every 3s
+      // Start polling for real completion from payment gateway
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = setInterval(async () => {
         if (data.orderTrackingId || data.merchantReference) {
@@ -163,7 +163,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
             clearInterval(pollIntervalRef.current);
           }
         }
-      }, 3000);
+      }, 5000);
     } catch (err: any) {
       console.error('Pesapal initiation error:', err);
       setStatusMessage({ type: 'error', text: err.message || 'Payment initialization failed. Please try again.' });

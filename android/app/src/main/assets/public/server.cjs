@@ -489,12 +489,12 @@ var PesapalService = class {
   async getTransactionStatus(orderTrackingId) {
     if (orderTrackingId.startsWith("DEMO_TRK_")) {
       return {
-        status_code: 1,
-        payment_status_description: "Completed",
+        status_code: 0,
+        payment_status_description: "Pending",
         amount: 5e3,
         merchant_reference: orderTrackingId,
         currency: "UGX",
-        payment_method: "Mobile Money (MTN/Airtel Sandbox)"
+        payment_method: "Mobile Money"
       };
     }
     const token = await this.getAuthToken();
@@ -816,7 +816,7 @@ app.get("/api/pesapal/verify-status", async (req, res) => {
       (t) => orderTrackingId && t.pesapalTrackingId === orderTrackingId || merchantReference && t.reference === merchantReference
     );
     let statusResult = orderTrackingId ? await pesapalService.getTransactionStatus(orderTrackingId) : null;
-    const isCompleted = statusResult?.status_code === 1 || statusResult?.payment_status_description?.toLowerCase() === "completed" || orderTrackingId && orderTrackingId.startsWith("DEMO_TRK_");
+    const isCompleted = statusResult?.status_code === 1 || statusResult?.payment_status_description?.toLowerCase() === "completed";
     if (isCompleted) {
       const targetUserId = userId || tx?.userId;
       const creditAmount = statusResult?.amount || tx?.amount || 5e3;

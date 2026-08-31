@@ -298,15 +298,14 @@ class PesapalService {
    * Get Transaction Status from Pesapal
    */
   public async getTransactionStatus(orderTrackingId: string): Promise<PesapalTransactionStatus | null> {
-    // Handle mock demo transactions
     if (orderTrackingId.startsWith('DEMO_TRK_')) {
       return {
-        status_code: 1,
-        payment_status_description: 'Completed',
+        status_code: 0,
+        payment_status_description: 'Pending',
         amount: 5000,
         merchant_reference: orderTrackingId,
         currency: 'UGX',
-        payment_method: 'Mobile Money (MTN/Airtel Sandbox)',
+        payment_method: 'Mobile Money',
       };
     }
 

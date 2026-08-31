@@ -201,10 +201,10 @@ app.get('/api/pesapal/verify-status', async (req: Request, res: Response) => {
 
     let statusResult = orderTrackingId ? await pesapalService.getTransactionStatus(orderTrackingId) : null;
 
+    // A payment is only completed if Pesapal confirmed status_code === 1 or status is Completed
     const isCompleted =
       statusResult?.status_code === 1 ||
-      statusResult?.payment_status_description?.toLowerCase() === 'completed' ||
-      (orderTrackingId && orderTrackingId.startsWith('DEMO_TRK_'));
+      statusResult?.payment_status_description?.toLowerCase() === 'completed';
 
     if (isCompleted) {
       const targetUserId = userId || tx?.userId;
