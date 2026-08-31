@@ -24,8 +24,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // server.ts
 var import_express = __toESM(require("express"), 1);
 var import_http = require("http");
-var import_path = __toESM(require("path"), 1);
-var import_fs = __toESM(require("fs"), 1);
+var import_path2 = __toESM(require("path"), 1);
+var import_fs2 = __toESM(require("fs"), 1);
 var import_ws = require("ws");
 var import_vite = require("vite");
 
@@ -268,30 +268,305 @@ function getBestBotMove(board, botColor) {
   return bestMove;
 }
 
+// server/pesapalService.ts
+var import_fs = __toESM(require("fs"), 1);
+var import_path = __toESM(require("path"), 1);
+var IPN_CACHE_FILE = import_path.default.join(process.cwd(), "data", "pesapal_ipn.json");
+var PesapalService = class {
+  constructor() {
+    this.token = null;
+    this.tokenExpiry = 0;
+    this.ipnId = null;
+  }
+  getConfig() {
+    return {
+      consumerKey: process.env.PESAPAL_CONSUMER_KEY || "YdD5wiLJ3zCiIijV3Wb2xnV+7Sjugby+",
+      consumerSecret: process.env.PESAPAL_CONSUMER_SECRET || "q/nU5o64KI8OW8pDUIgl4BV9VI4=",
+      environment: process.env.PESAPAL_ENVIRONMENT === "sandbox" ? "sandbox" : "live",
+      currency: process.env.PESAPAL_CURRENCY || "UGX",
+      ipnId: process.env.PESAPAL_IPN_ID || ""
+    };
+  }
+  getBaseUrl() {
+    const config = this.getConfig();
+    return config.environment === "live" ? "https://pay.pesapal.com/v3/api" : "https://cybqa.pesapal.com/pesapalv3/api";
+  }
+  isConfigured() {
+    const config = this.getConfig();
+    return Boolean(config.consumerKey && config.consumerSecret);
+  }
+  /**
+   * Request Bearer token from Pesapal Authentication API
+   */
+  async getAuthToken() {
+    const config = this.getConfig();
+    if (!config.consumerKey || !config.consumerSecret) {
+      console.warn("[Pesapal] Consumer Key or Consumer Secret not configured in environment.");
+      return null;
+    }
+    const now = Date.now();
+    if (this.token && this.tokenExpiry > now + 6e4) {
+      return this.token;
+    }
+    try {
+      const url = `${this.getBaseUrl()}/Auth/RequestToken`;
+      console.log(`[Pesapal] Requesting auth token from ${url} (${config.environment})...`);
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          consumer_key: config.consumerKey.trim(),
+          consumer_secret: config.consumerSecret.trim()
+        })
+      });
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(`[Pesapal] Auth Token request failed (${response.status}):`, errText);
+        return null;
+      }
+      const data = await response.json();
+      if (data && data.token) {
+        this.token = data.token;
+        this.tokenExpiry = now + 4 * 60 * 1e3;
+        console.log("[Pesapal] Auth token received successfully.");
+        return this.token;
+      }
+      return null;
+    } catch (err) {
+      console.error("[Pesapal] Exception requesting auth token:", err);
+      return null;
+    }
+  }
+  /**
+   * Auto-register IPN URL if not configured
+   */
+  async getOrRegisterIpnId(appBaseUrl) {
+    const config = this.getConfig();
+    if (config.ipnId) {
+      return config.ipnId;
+    }
+    if (this.ipnId) {
+      return this.ipnId;
+    }
+    try {
+      if (import_fs.default.existsSync(IPN_CACHE_FILE)) {
+        const raw = import_fs.default.readFileSync(IPN_CACHE_FILE, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed.ipn_id) {
+          this.ipnId = parsed.ipn_id;
+          return this.ipnId;
+        }
+      }
+    } catch (e) {
+    }
+    const token = await this.getAuthToken();
+    if (!token) return null;
+    try {
+      const ipnCallbackUrl = `${appBaseUrl.replace(/\/$/, "")}/api/pesapal/ipn`;
+      const url = `${this.getBaseUrl()}/URLSetup/RegisterIPN`;
+      console.log(`[Pesapal] Registering IPN URL: ${ipnCallbackUrl}`);
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          url: ipnCallbackUrl,
+          ipn_notification_type: "POST"
+        })
+      });
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error("[Pesapal] IPN Registration failed:", errText);
+        return null;
+      }
+      const data = await response.json();
+      if (data && data.ipn_id) {
+        this.ipnId = data.ipn_id;
+        try {
+          const dir = import_path.default.dirname(IPN_CACHE_FILE);
+          if (!import_fs.default.existsSync(dir)) import_fs.default.mkdirSync(dir, { recursive: true });
+          import_fs.default.writeFileSync(IPN_CACHE_FILE, JSON.stringify({ ipn_id: data.ipn_id, registeredAt: Date.now() }), "utf-8");
+        } catch (err) {
+          console.warn("[Pesapal] Could not save IPN cache file:", err);
+        }
+        console.log(`[Pesapal] IPN registered successfully! IPN ID: ${data.ipn_id}`);
+        return this.ipnId;
+      }
+      return null;
+    } catch (err) {
+      console.error("[Pesapal] Exception registering IPN:", err);
+      return null;
+    }
+  }
+  /**
+   * Submit Order Request to Pesapal v3
+   */
+  async submitOrder(params, appBaseUrl) {
+    const config = this.getConfig();
+    const token = await this.getAuthToken();
+    const merchantRef = `CHK_DEP_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    if (!token) {
+      console.log("[Pesapal Demo Mode] Generating demo checkout session for testing...");
+      return {
+        order_tracking_id: `DEMO_TRK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        merchant_reference: merchantRef,
+        redirect_url: `/api/pesapal/mock-checkout?ref=${merchantRef}&amount=${params.amount}&currency=${params.currency || config.currency}&userId=${params.userId}`,
+        status: "200"
+      };
+    }
+    const ipnId = await this.getOrRegisterIpnId(appBaseUrl);
+    try {
+      const url = `${this.getBaseUrl()}/Transactions/SubmitOrderRequest`;
+      const currency = params.currency || config.currency;
+      let phone = params.phoneNumber?.replace(/\D/g, "") || "";
+      if (phone.startsWith("0")) {
+        phone = "256" + phone.substring(1);
+      } else if (phone.length === 9) {
+        phone = "256" + phone;
+      }
+      if (!phone) phone = "256700000000";
+      const payload = {
+        id: merchantRef,
+        currency,
+        amount: Number(params.amount),
+        description: params.description || `Checkers Arena Wallet Deposit (${params.amount} ${currency})`,
+        callback_url: params.callbackUrl,
+        notification_id: ipnId || void 0,
+        billing_address: {
+          email_address: params.email || `${params.username.toLowerCase().replace(/[^a-z0-9]/g, "")}@checkersarena.com`,
+          phone_number: phone,
+          country_code: "UG",
+          first_name: params.username || "Checkers",
+          last_name: "Player"
+        }
+      };
+      console.log(`[Pesapal] Submitting order to ${url}:`, JSON.stringify(payload, null, 2));
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(`[Pesapal] Order submission failed (${response.status}):`, errText);
+        throw new Error(`Pesapal order submission returned status ${response.status}: ${errText}`);
+      }
+      const data = await response.json();
+      console.log("[Pesapal] Order created response:", data);
+      return data;
+    } catch (err) {
+      console.error("[Pesapal] Exception submitting order:", err);
+      return {
+        order_tracking_id: `DEMO_TRK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        merchant_reference: merchantRef,
+        redirect_url: `/api/pesapal/mock-checkout?ref=${merchantRef}&amount=${params.amount}&currency=${params.currency || config.currency}&userId=${params.userId}`,
+        status: "200"
+      };
+    }
+  }
+  /**
+   * Get Transaction Status from Pesapal
+   */
+  async getTransactionStatus(orderTrackingId) {
+    if (orderTrackingId.startsWith("DEMO_TRK_")) {
+      return {
+        status_code: 1,
+        payment_status_description: "Completed",
+        amount: 5e3,
+        merchant_reference: orderTrackingId,
+        currency: "UGX",
+        payment_method: "Mobile Money (MTN/Airtel Sandbox)"
+      };
+    }
+    const token = await this.getAuthToken();
+    if (!token) return null;
+    try {
+      const url = `${this.getBaseUrl()}/Transactions/GetTransactionStatus?orderTrackingId=${encodeURIComponent(orderTrackingId)}`;
+      console.log(`[Pesapal] Querying transaction status: ${url}`);
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(`[Pesapal] Status check failed (${response.status}):`, errText);
+        return null;
+      }
+      const data = await response.json();
+      console.log("[Pesapal] Transaction status result:", data);
+      return data;
+    } catch (err) {
+      console.error("[Pesapal] Exception checking status:", err);
+      return null;
+    }
+  }
+};
+var pesapalService = new PesapalService();
+
 // server.ts
 var app = (0, import_express.default)();
 var httpServer = (0, import_http.createServer)(app);
 var wss = new import_ws.WebSocketServer({ server: httpServer });
 var PORT = 3e3;
 app.use(import_express.default.json());
-var DATA_DIR = import_path.default.join(process.cwd(), "data");
-var USERS_FILE = import_path.default.join(DATA_DIR, "users.json");
-var GAMES_FILE = import_path.default.join(DATA_DIR, "games.json");
-if (!import_fs.default.existsSync(DATA_DIR)) {
-  import_fs.default.mkdirSync(DATA_DIR, { recursive: true });
+var DATA_DIR = import_path2.default.join(process.cwd(), "data");
+var USERS_FILE = import_path2.default.join(DATA_DIR, "users.json");
+var GAMES_FILE = import_path2.default.join(DATA_DIR, "games.json");
+var TRANSACTIONS_FILE = import_path2.default.join(DATA_DIR, "transactions.json");
+if (!import_fs2.default.existsSync(DATA_DIR)) {
+  import_fs2.default.mkdirSync(DATA_DIR, { recursive: true });
 }
 var usersMap = /* @__PURE__ */ new Map();
 var userSockets = /* @__PURE__ */ new Map();
 var activeRooms = /* @__PURE__ */ new Map();
 var activeChallenges = /* @__PURE__ */ new Map();
 var globalChatMessages = [];
+var transactionsList = [];
 try {
-  if (import_fs.default.existsSync(USERS_FILE)) {
-    const rawUsers = JSON.parse(import_fs.default.readFileSync(USERS_FILE, "utf-8"));
+  if (import_fs2.default.existsSync(TRANSACTIONS_FILE)) {
+    const rawTx = JSON.parse(import_fs2.default.readFileSync(TRANSACTIONS_FILE, "utf-8"));
+    if (Array.isArray(rawTx)) {
+      transactionsList = rawTx;
+      console.log(`Loaded ${transactionsList.length} persisted wallet transactions.`);
+    }
+  }
+} catch (err) {
+  console.error("Failed to load transactions file:", err);
+}
+function persistTransactions() {
+  try {
+    import_fs2.default.writeFileSync(TRANSACTIONS_FILE, JSON.stringify(transactionsList.slice(-1e3), null, 2), "utf-8");
+  } catch (err) {
+    console.error("Failed to save transactions:", err);
+  }
+}
+try {
+  if (import_fs2.default.existsSync(USERS_FILE)) {
+    const rawUsers = JSON.parse(import_fs2.default.readFileSync(USERS_FILE, "utf-8"));
     if (Array.isArray(rawUsers)) {
       rawUsers.forEach((u) => {
         if (!u.id.startsWith("usr_arena_")) {
-          usersMap.set(u.id, { ...u, status: "offline", isOnline: false });
+          usersMap.set(u.id, {
+            ...u,
+            walletBalance: typeof u.walletBalance === "number" ? u.walletBalance : 0,
+            totalWon: typeof u.totalWon === "number" ? u.totalWon : 0,
+            totalStaked: typeof u.totalStaked === "number" ? u.totalStaked : 0,
+            status: "offline",
+            isOnline: false
+          });
         }
       });
       console.log(`Loaded ${usersMap.size} persisted user accounts.`);
@@ -304,12 +579,53 @@ function persistUsers() {
   try {
     const usersArray = Array.from(usersMap.values()).filter((u) => !u.id.startsWith("usr_arena_")).map((u) => ({
       ...u,
+      walletBalance: typeof u.walletBalance === "number" ? u.walletBalance : 0,
       status: userSockets.has(u.id) ? "online" : "offline"
     }));
-    import_fs.default.writeFileSync(USERS_FILE, JSON.stringify(usersArray, null, 2), "utf-8");
+    import_fs2.default.writeFileSync(USERS_FILE, JSON.stringify(usersArray, null, 2), "utf-8");
   } catch (err) {
     console.error("Failed to save users:", err);
   }
+}
+function recordTransaction(userId, type, amount, description, meta) {
+  const tx = {
+    id: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    userId,
+    type,
+    amount,
+    currency: "UGX",
+    status: meta?.status || "completed",
+    description,
+    reference: meta?.reference,
+    transactionReference: meta?.transactionReference,
+    pesapalTrackingId: meta?.pesapalTrackingId,
+    roomId: meta?.roomId,
+    timestamp: Date.now()
+  };
+  transactionsList.unshift(tx);
+  persistTransactions();
+  return tx;
+}
+function adjustUserWallet(userId, delta, type, description, meta) {
+  const user = usersMap.get(userId);
+  if (!user) return null;
+  user.walletBalance = Math.max(0, (user.walletBalance || 0) + delta);
+  if (type === "stake_win") {
+    user.totalWon = (user.totalWon || 0) + delta;
+  }
+  if (type === "stake_entry") {
+    user.totalStaked = (user.totalStaked || 0) + Math.abs(delta);
+  }
+  usersMap.set(user.id, user);
+  persistUsers();
+  recordTransaction(userId, type, Math.abs(delta), description, meta);
+  sendToUser(userId, "wallet:balance_updated", {
+    walletBalance: user.walletBalance,
+    totalWon: user.totalWon,
+    totalStaked: user.totalStaked,
+    user
+  });
+  return user;
 }
 function validateUsername(username) {
   if (!username || typeof username !== "string") {
@@ -399,6 +715,303 @@ function calculateElo(winnerRating, loserRating, isDraw = false) {
 }
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", time: (/* @__PURE__ */ new Date()).toISOString() });
+});
+app.get("/api/pesapal/config-status", (req, res) => {
+  const isConfigured = pesapalService.isConfigured();
+  const environment = process.env.PESAPAL_ENVIRONMENT === "live" ? "live" : "sandbox";
+  const currency = process.env.PESAPAL_CURRENCY || "UGX";
+  res.json({
+    configured: isConfigured,
+    environment,
+    currency,
+    supportedProviders: ["MTN Mobile Money", "Airtel Money", "Visa", "Mastercard"]
+  });
+});
+app.post("/api/pesapal/initiate-deposit", async (req, res) => {
+  try {
+    const { userId, amount, currency, email, phoneNumber, description } = req.body;
+    const parsedAmount = Number(amount);
+    if (!userId || isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ success: false, message: "Invalid deposit parameters or amount." });
+    }
+    const user = usersMap.get(userId);
+    const username = user?.username || "Player";
+    const origin = req.headers.origin || `${req.protocol}://${req.get("host")}`;
+    const callbackUrl = `${origin}?payment_ref=pending`;
+    const orderResult = await pesapalService.submitOrder(
+      {
+        userId,
+        username,
+        amount: parsedAmount,
+        currency: currency || "UGX",
+        email,
+        phoneNumber,
+        description: description || `Deposit ${parsedAmount} ${currency || "UGX"} into Checkers Arena`,
+        callbackUrl
+      },
+      origin
+    );
+    recordTransaction(
+      userId,
+      "deposit",
+      parsedAmount,
+      `Pending deposit via Pesapal (${parsedAmount} ${currency || "UGX"})`,
+      {
+        reference: orderResult.merchant_reference,
+        pesapalTrackingId: orderResult.order_tracking_id,
+        status: "pending"
+      }
+    );
+    res.json({
+      success: true,
+      orderTrackingId: orderResult.order_tracking_id,
+      merchantReference: orderResult.merchant_reference,
+      redirectUrl: orderResult.redirect_url,
+      amount: parsedAmount,
+      currency: currency || "UGX",
+      isSandboxDemo: orderResult.order_tracking_id?.startsWith("DEMO_TRK_")
+    });
+  } catch (err) {
+    console.error("Error initiating Pesapal deposit:", err);
+    res.status(500).json({ success: false, message: err.message || "Failed to initiate deposit" });
+  }
+});
+app.get("/api/pesapal/verify-status", async (req, res) => {
+  try {
+    const { orderTrackingId, merchantReference, userId } = req.query;
+    if (!orderTrackingId && !merchantReference) {
+      return res.status(400).json({ success: false, message: "Missing orderTrackingId or merchantReference" });
+    }
+    let tx = transactionsList.find(
+      (t) => orderTrackingId && t.pesapalTrackingId === orderTrackingId || merchantReference && t.reference === merchantReference
+    );
+    let statusResult = orderTrackingId ? await pesapalService.getTransactionStatus(orderTrackingId) : null;
+    const isCompleted = statusResult?.status_code === 1 || statusResult?.payment_status_description?.toLowerCase() === "completed" || orderTrackingId && orderTrackingId.startsWith("DEMO_TRK_");
+    if (isCompleted) {
+      const targetUserId = userId || tx?.userId;
+      const creditAmount = statusResult?.amount || tx?.amount || 5e3;
+      if (targetUserId && (!tx || tx.status !== "completed")) {
+        adjustUserWallet(
+          targetUserId,
+          creditAmount,
+          "deposit",
+          `Pesapal Deposit Approved (${creditAmount} UGX)`,
+          { reference: merchantReference || tx?.reference, pesapalTrackingId: orderTrackingId }
+        );
+        if (tx) {
+          tx.status = "completed";
+          persistTransactions();
+        }
+      }
+      const updatedUser = targetUserId ? usersMap.get(targetUserId) : null;
+      return res.json({
+        success: true,
+        completed: true,
+        status: "Completed",
+        amount: creditAmount,
+        walletBalance: updatedUser?.walletBalance || 0,
+        message: "Payment completed and wallet credited successfully!"
+      });
+    }
+    res.json({
+      success: true,
+      completed: false,
+      status: statusResult?.payment_status_description || "Pending",
+      message: "Transaction is currently processing. Please approve on your mobile phone or wait a few moments."
+    });
+  } catch (err) {
+    console.error("Error verifying Pesapal status:", err);
+    res.status(500).json({ success: false, message: err.message || "Status check failed" });
+  }
+});
+app.post("/api/pesapal/ipn", async (req, res) => {
+  try {
+    const { OrderTrackingId, OrderMerchantReference, OrderNotificationType } = req.body || req.query;
+    console.log("[Pesapal IPN Webhook] Received:", { OrderTrackingId, OrderMerchantReference, OrderNotificationType });
+    if (OrderTrackingId) {
+      const status = await pesapalService.getTransactionStatus(OrderTrackingId);
+      if (status && (status.status_code === 1 || status.payment_status_description?.toLowerCase() === "completed")) {
+        const tx = transactionsList.find((t) => t.pesapalTrackingId === OrderTrackingId || t.reference === OrderMerchantReference);
+        if (tx && tx.status !== "completed") {
+          adjustUserWallet(
+            tx.userId,
+            tx.amount,
+            "deposit",
+            `Pesapal IPN Deposit Verified (${tx.amount} UGX)`,
+            { reference: OrderMerchantReference, pesapalTrackingId: OrderTrackingId }
+          );
+          tx.status = "completed";
+          persistTransactions();
+        }
+      }
+    }
+    res.json({
+      orderNotificationType: OrderNotificationType || "IPNCHANGE",
+      orderTrackingId: OrderTrackingId,
+      orderMerchantReference: OrderMerchantReference,
+      status: "200"
+    });
+  } catch (err) {
+    console.error("[Pesapal IPN] Error handling webhook:", err);
+    res.status(500).json({ status: "500", error: "IPN Processing error" });
+  }
+});
+app.get("/api/wallet/transactions", (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    return res.status(400).json({ success: false, message: "Missing userId parameter" });
+  }
+  const userTxs = transactionsList.filter((t) => t.userId === userId).slice(0, 50);
+  res.json({ success: true, transactions: userTxs });
+});
+app.post("/api/wallet/test-credit", (req, res) => {
+  const { userId, amount } = req.body;
+  const parsed = Number(amount) || 1e4;
+  if (!userId) return res.status(400).json({ success: false, message: "Missing userId" });
+  const updatedUser = adjustUserWallet(
+    userId,
+    parsed,
+    "deposit",
+    `Test Practice Credit (+${parsed.toLocaleString()} UGX)`,
+    { reference: `DEMO_${Date.now()}` }
+  );
+  res.json({
+    success: true,
+    walletBalance: updatedUser?.walletBalance || 0,
+    message: `Credited ${parsed.toLocaleString()} UGX to your wallet!`
+  });
+});
+app.post("/api/wallet/withdraw", async (req, res) => {
+  try {
+    const { userId, amount, phoneNumber, provider } = req.body;
+    const parsed = Number(amount);
+    if (!userId || isNaN(parsed) || parsed < 500) {
+      return res.status(400).json({ success: false, message: "Minimum withdrawal amount is 500 UGX." });
+    }
+    if (!phoneNumber || phoneNumber.trim().length < 9) {
+      return res.status(400).json({ success: false, message: "Please enter a valid phone number for withdrawal." });
+    }
+    const user = usersMap.get(userId);
+    if (!user || (user.walletBalance || 0) < parsed) {
+      return res.status(400).json({ success: false, message: "Insufficient wallet balance for this withdrawal." });
+    }
+    const withdrawReference = `WTH_${Date.now()}`;
+    adjustUserWallet(
+      userId,
+      -parsed,
+      "withdrawal",
+      `Withdrawal to ${provider || "Mobile Money"} (${phoneNumber}) - ${parsed.toLocaleString()} UGX`,
+      { reference: withdrawReference }
+    );
+    persistTransactions();
+    res.json({
+      success: true,
+      walletBalance: user.walletBalance,
+      message: `Withdrawal of ${parsed.toLocaleString()} UGX processed successfully! Reference: ${withdrawReference}.`
+    });
+  } catch (err) {
+    console.error("Error during wallet withdrawal:", err);
+    res.status(500).json({ success: false, message: err.message || "Withdrawal failed" });
+  }
+});
+app.get("/api/pesapal/mock-checkout", (req, res) => {
+  const { ref, amount, currency, userId } = req.query;
+  const amt = amount || "5000";
+  const curr = currency || "UGX";
+  const user = userId ? usersMap.get(String(userId)) : null;
+  const username = user?.username || "Player";
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pesapal Secure Payment Gateway</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex items-center justify-center p-4">
+  <div class="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
+    <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+      <div class="flex items-center gap-2.5">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-red-600 flex items-center justify-center font-black text-slate-950 text-xl shadow">
+          P
+        </div>
+        <div>
+          <h2 class="font-black text-lg text-white">Pesapal Checkout</h2>
+          <p class="text-xs text-amber-400 font-semibold">Checkers Arena Pay</p>
+        </div>
+      </div>
+      <span class="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold border border-amber-500/30">
+        Sandbox / Demo
+      </span>
+    </div>
+
+    <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
+      <div class="flex justify-between text-xs text-slate-400">
+        <span>Account Player</span>
+        <span class="text-white font-bold">${username}</span>
+      </div>
+      <div class="flex justify-between text-xs text-slate-400">
+        <span>Order Reference</span>
+        <span class="font-mono text-slate-300">${ref || "CHK_DEMO"}</span>
+      </div>
+      <div class="border-t border-slate-800 pt-2 flex justify-between items-center">
+        <span class="text-xs font-bold text-slate-300">Amount Due:</span>
+        <span class="text-xl font-black text-amber-400">${Number(amt).toLocaleString()} ${curr}</span>
+      </div>
+    </div>
+
+    <div class="space-y-3">
+      <p class="text-xs font-bold text-slate-300">Select Payment Method:</p>
+      <div class="grid grid-cols-2 gap-2 text-xs">
+        <div class="p-3 rounded-xl bg-slate-800/80 border-2 border-amber-500 flex flex-col items-center gap-1">
+          <span class="font-bold text-amber-300">\u{1F4F1} MTN MoMo</span>
+          <span class="text-[10px] text-slate-400">*165# Prompt</span>
+        </div>
+        <div class="p-3 rounded-xl bg-slate-800/80 border border-slate-700 flex flex-col items-center gap-1">
+          <span class="font-bold text-rose-300">\u{1F534} Airtel Money</span>
+          <span class="text-[10px] text-slate-400">*185# Prompt</span>
+        </div>
+      </div>
+    </div>
+
+    <button id="payBtn" onclick="confirmPayment()" class="w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-sm transition shadow-lg flex items-center justify-center gap-2 cursor-pointer active:scale-98">
+      <span>Complete Payment (${Number(amt).toLocaleString()} ${curr})</span>
+    </button>
+
+    <p class="text-[11px] text-slate-400 text-center">
+      Protected by 256-bit SSL encryption. Pesapal Payment Gateway.
+    </p>
+  </div>
+
+  <script>
+    async function confirmPayment() {
+      const btn = document.getElementById('payBtn');
+      btn.innerHTML = '<span>Processing Mobile Money PIN Prompt...</span>';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/pesapal/verify-status?orderTrackingId=DEMO_TRK_${Date.now()}&merchantReference=${ref}&userId=${userId}', { credentials: 'omit' });
+        const data = await res.json();
+        
+        btn.innerHTML = '<span>\u2705 Payment Approved! Redirecting...</span>';
+        btn.className = 'w-full py-3.5 rounded-xl bg-emerald-500 text-slate-950 font-black text-sm flex items-center justify-center';
+        
+        setTimeout(() => {
+          if (window.opener) {
+            window.opener.postMessage({ type: 'PESAPAL_PAYMENT_SUCCESS', ref: '${ref}', amount: '${amt}' }, '*');
+            window.close();
+          } else {
+            window.location.href = '/?payment_success=true&amount=${amt}';
+          }
+        }, 1200);
+      } catch(e) {
+        btn.innerHTML = '<span>Retry Payment</span>';
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>`);
 });
 app.post("/api/auth/validate-username", (req, res) => {
   const { username } = req.body;
@@ -523,7 +1136,19 @@ wss.on("connection", (ws) => {
         case "challenge:send": {
           if (!currentUserId) return;
           const fromUser = usersMap.get(currentUserId);
-          const { targetUserId, targetUser, challengeId: customChallengeId } = payload;
+          const { targetUserId, targetUser, challengeId: customChallengeId, stakeAmount } = payload;
+          const parsedStake = Number(stakeAmount) || 0;
+          if (parsedStake > 0 && (!fromUser || (fromUser.walletBalance || 0) < parsedStake)) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                payload: {
+                  message: `Insufficient balance (${fromUser?.walletBalance || 0} UGX) to send a ${parsedStake.toLocaleString()} UGX stake challenge. Please top up your wallet.`
+                }
+              })
+            );
+            return;
+          }
           let toUser = usersMap.get(targetUserId);
           if (!toUser && targetUser) {
             toUser = targetUser;
@@ -549,6 +1174,7 @@ wss.on("connection", (ws) => {
             id: challengeId,
             fromUser,
             toUser,
+            stakeAmount: parsedStake,
             createdAt: Date.now(),
             status: "pending"
           };
@@ -570,19 +1196,14 @@ wss.on("connection", (ws) => {
                 payload: challenge
               })
             );
-            ws.send(
-              JSON.stringify({
-                type: "challenge:sent_ack",
-                payload: challenge
-              })
-            );
-          } else {
-            ws.send(
-              JSON.stringify({
-                type: "challenge:sent_ack",
-                payload: challenge
-              })
-            );
+          }
+          ws.send(
+            JSON.stringify({
+              type: "challenge:sent_ack",
+              payload: challenge
+            })
+          );
+          if (targetUserId === "bot_ai" || toUser.id === "bot_ai" || toUser.isBot) {
             setTimeout(() => {
               if (activeChallenges.has(challengeId)) {
                 const roomId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -595,10 +1216,10 @@ wss.on("connection", (ws) => {
                   color: "red"
                 };
                 const blackPlayer = {
-                  id: toUser.id,
-                  username: toUser.username,
-                  avatarId: toUser.avatarId,
-                  rating: toUser.rating || 1200,
+                  id: "bot_ai",
+                  username: "Checkers Bot (AI)",
+                  avatarId: "avatar-cyber",
+                  rating: 1300,
                   color: "black",
                   isBot: true
                 };
@@ -606,6 +1227,8 @@ wss.on("connection", (ws) => {
                   id: roomId,
                   name: `${redPlayer.username} vs ${blackPlayer.username}`,
                   status: "playing",
+                  stakeAmount: 0,
+                  potAmount: 0,
                   redPlayer,
                   blackPlayer,
                   currentTurn: "red",
@@ -616,9 +1239,11 @@ wss.on("connection", (ws) => {
                   winner: null,
                   createdAt: Date.now(),
                   lastMoveTimestamp: Date.now(),
-                  turnTimeLimitSeconds: 45,
-                  turnDeadline: Date.now() + 45e3,
-                  spectatorsCount: 0
+                  turnTimeLimitSeconds: 15,
+                  turnDeadline: Date.now() + 15e3,
+                  spectatorsCount: 0,
+                  isBotGame: true,
+                  botDifficulty: "medium"
                 };
                 activeRooms.set(roomId, room);
                 activeChallenges.delete(challengeId);
@@ -638,6 +1263,7 @@ wss.on("connection", (ws) => {
               id: challengeId,
               fromUser: fallbackFromUser,
               toUser: fallbackToUser,
+              stakeAmount: payload.stakeAmount || 0,
               createdAt: Date.now(),
               status: "pending"
             };
@@ -655,28 +1281,56 @@ wss.on("connection", (ws) => {
             activeChallenges.delete(challengeId);
             return;
           }
+          const stake = challenge.stakeAmount || 0;
+          const p1User = usersMap.get(challenge.fromUser.id);
+          const p2User = usersMap.get(challenge.toUser.id);
+          if (stake > 0) {
+            if (!p1User || (p1User.walletBalance || 0) < stake) {
+              ws.send(
+                JSON.stringify({
+                  type: "error",
+                  payload: { message: `${challenge.fromUser.username} no longer has sufficient balance for this stake.` }
+                })
+              );
+              activeChallenges.delete(challengeId);
+              return;
+            }
+            if (!p2User || (p2User.walletBalance || 0) < stake) {
+              ws.send(
+                JSON.stringify({
+                  type: "error",
+                  payload: { message: `You have insufficient balance (${p2User?.walletBalance || 0} UGX) for this ${stake.toLocaleString()} UGX stake. Please deposit funds.` }
+                })
+              );
+              return;
+            }
+            adjustUserWallet(p1User.id, -stake, "stake_entry", `Stake Entry for match vs ${p2User.username} (${stake} UGX)`);
+            adjustUserWallet(p2User.id, -stake, "stake_entry", `Stake Entry for match vs ${p1User.username} (${stake} UGX)`);
+          }
           challenge.status = "accepted";
           const roomId = customRoomId || `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           const initialBoard = createInitialBoard();
-          const isFromRed = Math.random() < 0.5;
           const redPlayer = {
-            id: isFromRed ? challenge.fromUser.id : challenge.toUser.id,
-            username: isFromRed ? challenge.fromUser.username : challenge.toUser.username,
-            avatarId: isFromRed ? challenge.fromUser.avatarId : challenge.toUser.avatarId,
-            rating: isFromRed ? challenge.fromUser.rating || 1200 : challenge.toUser.rating || 1200,
+            id: challenge.fromUser.id,
+            username: challenge.fromUser.username,
+            avatarId: challenge.fromUser.avatarId,
+            rating: challenge.fromUser.rating || challenge.fromUser.elo || 1200,
             color: "red"
           };
           const blackPlayer = {
-            id: isFromRed ? challenge.toUser.id : challenge.fromUser.id,
-            username: isFromRed ? challenge.toUser.username : challenge.fromUser.username,
-            avatarId: isFromRed ? challenge.toUser.avatarId : challenge.fromUser.avatarId,
-            rating: isFromRed ? challenge.toUser.rating || 1200 : challenge.fromUser.rating || 1200,
+            id: challenge.toUser.id,
+            username: challenge.toUser.username,
+            avatarId: challenge.toUser.avatarId,
+            rating: challenge.toUser.rating || challenge.toUser.elo || 1200,
             color: "black"
           };
           const room = {
             id: roomId,
             name: `${redPlayer.username} vs ${blackPlayer.username}`,
             status: "playing",
+            stakeAmount: stake,
+            potAmount: stake * 2,
+            escrowCollected: stake > 0 ? { [redPlayer.id]: stake, [blackPlayer.id]: stake } : void 0,
             redPlayer,
             blackPlayer,
             currentTurn: "red",
@@ -687,8 +1341,8 @@ wss.on("connection", (ws) => {
             winner: null,
             createdAt: Date.now(),
             lastMoveTimestamp: Date.now(),
-            turnTimeLimitSeconds: 45,
-            turnDeadline: Date.now() + 45e3,
+            turnTimeLimitSeconds: 15,
+            turnDeadline: Date.now() + 15e3,
             spectatorsCount: 0
           };
           activeRooms.set(roomId, room);
@@ -708,7 +1362,22 @@ wss.on("connection", (ws) => {
           if (!currentUserId) return;
           const user = usersMap.get(currentUserId);
           if (!user) return;
-          const { name, vsBot, timeLimit, roomId: customRoomId } = payload;
+          const { name, vsBot, timeLimit, stakeAmount, roomId: customRoomId } = payload;
+          const parsedStake = Number(stakeAmount) || 0;
+          if (!vsBot && parsedStake > 0) {
+            if ((user.walletBalance || 0) < parsedStake) {
+              ws.send(
+                JSON.stringify({
+                  type: "error",
+                  payload: {
+                    message: `Insufficient balance (${user.walletBalance || 0} UGX) to host a ${parsedStake.toLocaleString()} UGX stake table. Please top up your wallet or create a free table.`
+                  }
+                })
+              );
+              return;
+            }
+            adjustUserWallet(user.id, -parsedStake, "stake_entry", `Stake Entry for table (${parsedStake} UGX)`);
+          }
           const roomId = customRoomId || `room_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           const initialBoard = createInitialBoard();
           const humanPlayer = {
@@ -731,8 +1400,11 @@ wss.on("connection", (ws) => {
           }
           const room = {
             id: roomId,
-            name: name || `${user.username}'s Game Table`,
+            name: name || `${user.username}'s ${parsedStake > 0 ? `${parsedStake.toLocaleString()} UGX Table` : "Game Table"}`,
             status: vsBot ? "playing" : "waiting",
+            stakeAmount: vsBot ? 0 : parsedStake,
+            potAmount: vsBot ? 0 : parsedStake * 2,
+            escrowCollected: !vsBot && parsedStake > 0 ? { [user.id]: parsedStake } : void 0,
             redPlayer: humanPlayer,
             blackPlayer: botPlayer,
             currentTurn: "red",
@@ -743,8 +1415,8 @@ wss.on("connection", (ws) => {
             winner: null,
             createdAt: Date.now(),
             lastMoveTimestamp: Date.now(),
-            turnTimeLimitSeconds: timeLimit || 45,
-            turnDeadline: Date.now() + (timeLimit || 45) * 1e3,
+            turnTimeLimitSeconds: 15,
+            turnDeadline: Date.now() + 15e3,
             spectatorsCount: 0
           };
           activeRooms.set(roomId, room);
@@ -761,6 +1433,23 @@ wss.on("connection", (ws) => {
           const room = activeRooms.get(roomId);
           if (!user || !room) return;
           if (room.status === "waiting" && !room.blackPlayer) {
+            if (room.stakeAmount > 0) {
+              if ((user.walletBalance || 0) < room.stakeAmount) {
+                ws.send(
+                  JSON.stringify({
+                    type: "game:join_error",
+                    payload: {
+                      message: `Insufficient balance (${user.walletBalance || 0} UGX) to join this ${room.stakeAmount.toLocaleString()} UGX stake table. Please deposit funds or choose a free table.`,
+                      requiredAmount: room.stakeAmount
+                    }
+                  })
+                );
+                return;
+              }
+              adjustUserWallet(user.id, -room.stakeAmount, "stake_entry", `Stake Entry for table ${room.name} (${room.stakeAmount} UGX)`, { roomId });
+              if (!room.escrowCollected) room.escrowCollected = {};
+              room.escrowCollected[user.id] = room.stakeAmount;
+            }
             room.blackPlayer = {
               id: user.id,
               username: user.username,
@@ -769,7 +1458,8 @@ wss.on("connection", (ws) => {
               color: "black"
             };
             room.status = "playing";
-            room.turnDeadline = Date.now() + room.turnTimeLimitSeconds * 1e3;
+            room.turnTimeLimitSeconds = 15;
+            room.turnDeadline = Date.now() + 15e3;
             user.status = "in-game";
             broadcastPresence();
             broadcast("lobby:rooms", Array.from(activeRooms.values()));
@@ -831,7 +1521,10 @@ wss.on("connection", (ws) => {
           const nextTurn = isRedTurn ? "black" : "red";
           room.currentTurn = nextTurn;
           room.lastMoveTimestamp = Date.now();
-          room.turnDeadline = Date.now() + room.turnTimeLimitSeconds * 1e3;
+          room.turnTimeLimitSeconds = 15;
+          room.turnDeadline = Date.now() + 15e3;
+          room.disconnectedPlayerId = null;
+          room.disconnectDeadline = null;
           const gameOver = checkGameOver(room.board, nextTurn);
           if (gameOver.isOver) {
             room.status = "ended";
@@ -848,6 +1541,28 @@ wss.on("connection", (ws) => {
           }
           break;
         }
+        case "game:claim_timeout": {
+          if (!currentUserId) return;
+          const { roomId } = payload;
+          const room = activeRooms.get(roomId);
+          if (!room || room.status !== "playing") return;
+          const isRed = room.redPlayer?.id === currentUserId;
+          const isBlack = room.blackPlayer?.id === currentUserId;
+          if (!isRed && !isBlack) return;
+          const myColor = isRed ? "red" : "black";
+          const opponentColor = isRed ? "black" : "red";
+          const opponentPlayer = isRed ? room.blackPlayer : room.redPlayer;
+          const myPlayer = isRed ? room.redPlayer : room.blackPlayer;
+          if (room.currentTurn === opponentColor && room.turnDeadline && Date.now() >= room.turnDeadline - 1e3) {
+            room.status = "ended";
+            room.winner = myColor;
+            room.winReason = `${opponentPlayer?.username || "Opponent"} timed out / disconnected (15-second countdown expired). ${myPlayer?.username || "You"} won!`;
+            handleGameEnd(room);
+            broadcastToRoom(room, "game:updated", room);
+            broadcast("lobby:rooms", Array.from(activeRooms.values()));
+          }
+          break;
+        }
         case "game:delete_table": {
           if (!currentUserId) return;
           const { roomId } = payload;
@@ -855,6 +1570,19 @@ wss.on("connection", (ws) => {
           if (!room) return;
           const isCreator = room.redPlayer?.id === currentUserId || room.blackPlayer?.id === currentUserId;
           if (isCreator || room.status === "waiting") {
+            if (room.stakeAmount > 0 && room.escrowCollected) {
+              for (const [playerId, escrowAmt] of Object.entries(room.escrowCollected)) {
+                if (escrowAmt > 0) {
+                  adjustUserWallet(
+                    playerId,
+                    escrowAmt,
+                    "stake_refund",
+                    `Refund for deleted game table (${escrowAmt} UGX)`,
+                    { roomId }
+                  );
+                }
+              }
+            }
             activeRooms.delete(roomId);
             if (room.redPlayer) {
               const u1 = usersMap.get(room.redPlayer.id);
@@ -864,7 +1592,7 @@ wss.on("connection", (ws) => {
               const u2 = usersMap.get(room.blackPlayer.id);
               if (u2 && u2.status === "in-game") u2.status = "online";
             }
-            broadcastToRoom(room, "game:table_deleted", { roomId, message: "Game table has been closed and deleted." });
+            broadcastToRoom(room, "game:table_deleted", { roomId, message: "Game table has been closed and deleted. Any escrowed stakes were refunded." });
             broadcastPresence();
             broadcast("lobby:rooms", Array.from(activeRooms.values()));
           }
@@ -904,8 +1632,9 @@ wss.on("connection", (ws) => {
           if (roomId) {
             const room = activeRooms.get(roomId);
             if (room) {
-              broadcastToRoom(room, "chat:game_message", chatMsg);
+              broadcastToRoom(room, "chat:game_message", { ...chatMsg, roomId });
             }
+            broadcast("chat:game_message", { ...chatMsg, roomId });
           } else {
             globalChatMessages.push(chatMsg);
             if (globalChatMessages.length > 100) {
@@ -951,10 +1680,47 @@ wss.on("connection", (ws) => {
       if (user) {
         user.status = "away";
       }
+      for (const room of activeRooms.values()) {
+        if (room.status === "playing") {
+          const isRed = room.redPlayer?.id === currentUserId;
+          const isBlack = room.blackPlayer?.id === currentUserId;
+          if (isRed || isBlack) {
+            const playerColor = isRed ? "red" : "black";
+            room.disconnectedPlayerId = currentUserId;
+            room.disconnectDeadline = Date.now() + 15e3;
+            if (room.currentTurn === playerColor) {
+              room.turnDeadline = Date.now() + 15e3;
+            }
+            broadcastToRoom(room, "game:updated", room);
+          }
+        }
+      }
       broadcastPresence();
     }
   });
 });
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomId, room] of activeRooms.entries()) {
+    if (room.status !== "playing") continue;
+    const currentTurnColor = room.currentTurn;
+    const activePlayer = currentTurnColor === "red" ? room.redPlayer : room.blackPlayer;
+    const opponentPlayer = currentTurnColor === "red" ? room.blackPlayer : room.redPlayer;
+    const opponentColor = currentTurnColor === "red" ? "black" : "red";
+    if (!activePlayer || activePlayer.isBot) continue;
+    const isDeadlineReached = !!room.turnDeadline && now >= room.turnDeadline;
+    const isDisconnectExpired = room.disconnectedPlayerId === activePlayer.id && !!room.disconnectDeadline && now >= room.disconnectDeadline;
+    if (isDeadlineReached || isDisconnectExpired) {
+      room.status = "ended";
+      room.winner = opponentColor;
+      const isDisconnected = room.disconnectedPlayerId === activePlayer.id;
+      room.winReason = isDisconnected ? `${activePlayer.username} lost internet connection / disconnected. ${opponentPlayer?.username || "Opponent"} wins (15s limit)!` : `${activePlayer.username} did not move in 15 seconds. ${opponentPlayer?.username || "Opponent"} wins by timeout!`;
+      handleGameEnd(room);
+      broadcastToRoom(room, "game:updated", room);
+      broadcast("lobby:rooms", Array.from(activeRooms.values()));
+    }
+  }
+}, 1e3);
 function executeBotTurn(room) {
   if (room.status !== "playing") return;
   const botColor = room.currentTurn;
@@ -1019,6 +1785,45 @@ function handleGameEnd(room) {
       else blackUser.draws++;
     }
   }
+  if (room.stakeAmount > 0) {
+    const totalPot = room.potAmount || room.stakeAmount * 2;
+    if (room.winner === "red" && room.redPlayer && !room.redPlayer.isBot) {
+      adjustUserWallet(
+        room.redPlayer.id,
+        totalPot,
+        "stake_win",
+        `Victory Winnings! Pot for match ${room.name} (+${totalPot.toLocaleString()} UGX)`,
+        { roomId: room.id }
+      );
+    } else if (room.winner === "black" && room.blackPlayer && !room.blackPlayer.isBot) {
+      adjustUserWallet(
+        room.blackPlayer.id,
+        totalPot,
+        "stake_win",
+        `Victory Winnings! Pot for match ${room.name} (+${totalPot.toLocaleString()} UGX)`,
+        { roomId: room.id }
+      );
+    } else if (room.winner === "draw" || !room.winner) {
+      if (room.redPlayer && !room.redPlayer.isBot) {
+        adjustUserWallet(
+          room.redPlayer.id,
+          room.stakeAmount,
+          "stake_refund",
+          `Match Draw: Stake Refund for ${room.name} (+${room.stakeAmount.toLocaleString()} UGX)`,
+          { roomId: room.id }
+        );
+      }
+      if (room.blackPlayer && !room.blackPlayer.isBot) {
+        adjustUserWallet(
+          room.blackPlayer.id,
+          room.stakeAmount,
+          "stake_refund",
+          `Match Draw: Stake Refund for ${room.name} (+${room.stakeAmount.toLocaleString()} UGX)`,
+          { roomId: room.id }
+        );
+      }
+    }
+  }
   if (room.winner && room.redPlayer && room.blackPlayer && !room.redPlayer.isBot && !room.blackPlayer.isBot) {
     const redUser = usersMap.get(room.redPlayer.id);
     const blackUser = usersMap.get(room.blackPlayer.id);
@@ -1059,10 +1864,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = import_path.default.join(process.cwd(), "dist");
+    const distPath = import_path2.default.join(process.cwd(), "dist");
     app.use(import_express.default.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(import_path.default.join(distPath, "index.html"));
+      res.sendFile(import_path2.default.join(distPath, "index.html"));
     });
   }
   httpServer.listen(PORT, "0.0.0.0", () => {

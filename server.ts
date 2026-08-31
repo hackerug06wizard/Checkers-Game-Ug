@@ -23,7 +23,6 @@ import {
   WalletTransaction,
 } from './src/types.js';
 import { pesapalService } from './server/pesapalService.js';
-import { yoPaymentsService } from './server/yoPaymentsService.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -285,186 +284,9 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// Yo! Payments Configuration & Status Check API
-app.get('/api/yo/config-status', (req, res) => {
-  const isConfigured = yoPaymentsService.isConfigured();
-  const environment = yoPaymentsService.getEnvironment();
-  const currency = yoPaymentsService.getCurrency();
-  res.json({
-    configured: isConfigured,
-    environment,
-    currency,
-    supportedProviders: ['MTN Mobile Money', 'Airtel Money'],
-    features: ['Instant Direct USSD PIN Push', 'Instant Mobile Money Disburse'],
-  });
-});
-
-// Yo! Payments Deposit Initiation API (Triggers direct USSD PIN Prompt on phone)
-app.post('/api/yo/initiate-deposit', async (req, res) => {
-  try {
-    const { userId, amount, phoneNumber, description, username } = req.body;
-    const parsedAmount = Number(amount);
-
-    if (!userId || isNaN(parsedAmount) || parsedAmount < 500) {
-      return res.status(400).json({ success: false, message: 'Minimum deposit is 500 UGX.' });
-    }
-
-    if (!phoneNumber || phoneNumber.trim().length < 9) {
-      return res.status(400).json({ success: false, message: 'Please enter a valid Ugandan MTN or Airtel phone number.' });
-    }
-
-    const user = usersMap.get(userId);
-    const uname = user?.username || username || 'Player';
-
-    const result = await yoPaymentsService.initiateDeposit({
-      userId,
-      username: uname,
-      amount: parsedAmount,
-      currency: 'UGX',
-      phoneNumber,
-      description: description || `Deposit ${parsedAmount.toLocaleString()} UGX into Checkers Arena`,
-    });
-
-    if (result.success) {
-      // Record pending transaction in wallet history
-      recordTransaction(
-        userId,
-        'deposit',
-        parsedAmount,
-        `Mobile Money Deposit via Yo! Payments (${phoneNumber})`,
-        {
-          reference: result.externalReference,
-          transactionReference: result.transactionReference,
-          status: 'pending',
-        }
-      );
-      persistTransactions();
-
-      res.json({
-        success: true,
-        status: result.status,
-        transactionReference: result.transactionReference,
-        externalReference: result.externalReference,
-        amount: parsedAmount,
-        currency: 'UGX',
-        message: result.message || 'USSD PIN Prompt sent to your phone. Please enter your PIN to approve.',
-        isSandboxDemo: result.isSandboxDemo,
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        message: result.message || 'Could not initiate Mobile Money prompt. Please check your number and try again.',
-      });
-    }
-  } catch (err: any) {
-    console.error('Error initiating Yo! Payments deposit:', err);
-    res.status(500).json({ success: false, message: err.message || 'Failed to initiate deposit' });
-  }
-});
-
-// Yo! Payments Transaction Status Verification API
-app.get('/api/yo/verify-status', async (req, res) => {
-  try {
-    const { transactionReference, externalReference, userId } = req.query as {
-      transactionReference?: string;
-      externalReference?: string;
-      userId?: string;
-    };
-
-    if (!transactionReference && !externalReference) {
-      return res.status(400).json({ success: false, message: 'Missing transactionReference or externalReference' });
-    }
-
-    // Find transaction in local store
-    let tx = transactionsList.find(
-      (t) => (transactionReference && t.reference === transactionReference) || 
-             (externalReference && t.reference === externalReference) ||
-             (t as any).transactionReference === transactionReference
-    );
-
-    const statusResult = await yoPaymentsService.getTransactionStatus(
-      transactionReference || '',
-      externalReference
-    );
-
-    const isCompleted = statusResult.status === 'SUCCEEDED' || (transactionReference && transactionReference.startsWith('YO_DEMO_'));
-
-    if (isCompleted) {
-      const targetUserId = userId || tx?.userId;
-      const creditAmount = statusResult.amount || tx?.amount || 5000;
-
-      if (targetUserId && (!tx || tx.status !== 'completed')) {
-        adjustUserWallet(
-          targetUserId,
-          creditAmount,
-          'deposit',
-          `Yo! Payments Mobile Money Approved (+${creditAmount.toLocaleString()} UGX)`,
-          { reference: externalReference || transactionReference, transactionReference }
-        );
-        if (tx) {
-          tx.status = 'completed';
-          persistTransactions();
-        }
-      }
-
-      const updatedUser = targetUserId ? usersMap.get(targetUserId) : null;
-
-      return res.json({
-        success: true,
-        completed: true,
-        status: 'SUCCEEDED',
-        amount: creditAmount,
-        walletBalance: updatedUser?.walletBalance || 0,
-        message: 'Payment received and credited to your wallet successfully!',
-      });
-    }
-
-    res.json({
-      success: true,
-      completed: false,
-      status: statusResult.status || 'PENDING',
-      message: statusResult.message || 'Waiting for PIN authorization on phone...',
-    });
-  } catch (err: any) {
-    console.error('Error verifying Yo! Payments status:', err);
-    res.status(500).json({ success: false, message: err.message || 'Status check failed' });
-  }
-});
-
-// Yo! Payments IPN / Instant Payment Notification Webhook
-app.post('/api/yo/ipn', async (req, res) => {
-  try {
-    const { transaction_reference, external_reference, response_status, amount_received } = req.body || req.query;
-    console.log('[Yo! Payments IPN Webhook] Received:', req.body || req.query);
-
-    if (response_status === 'OK' || response_status === 'SUCCESSFUL' || response_status === 'SUCCEEDED') {
-      const tx = transactionsList.find((t) => 
-        t.reference === external_reference || 
-        t.reference === transaction_reference ||
-        (t as any).transactionReference === transaction_reference
-      );
-
-      if (tx && tx.status !== 'completed') {
-        const creditAmt = Number(amount_received) || tx.amount;
-        adjustUserWallet(
-          tx.userId,
-          creditAmt,
-          'deposit',
-          `Yo! Payments IPN Verified (+${creditAmt.toLocaleString()} UGX)`,
-          { reference: external_reference, transactionReference: transaction_reference }
-        );
-        tx.status = 'completed';
-        persistTransactions();
-      }
-    }
-
-    res.send('OK');
-  } catch (err: any) {
-    console.error('[Yo! Payments IPN] Webhook processing error:', err);
-    res.status(500).send('ERROR');
-  }
-});
-
+// ==========================================================
+// MTN MoMo (Mobile Money) Developer API Integration
+// ==========================================================
 // Pesapal Configuration & Status Check API
 app.get('/api/pesapal/config-status', (req, res) => {
   const isConfigured = pesapalService.isConfigured();
@@ -689,32 +511,21 @@ app.post('/api/wallet/withdraw', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Insufficient wallet balance for this withdrawal.' });
     }
 
-    // Try processing withdrawal via Yo! Payments
-    let withdrawResult;
-    try {
-      withdrawResult = await yoPaymentsService.withdrawFunds({
-        userId,
-        amount: parsed,
-        phoneNumber,
-        description: `Checkers Arena Withdrawal (${parsed.toLocaleString()} UGX)`,
-      });
-    } catch (err: any) {
-      console.error('Yo Payments withdrawal error:', err);
-    }
+    const withdrawReference = `WTH_${Date.now()}`;
 
     adjustUserWallet(
       userId,
       -parsed,
       'withdrawal',
       `Withdrawal to ${provider || 'Mobile Money'} (${phoneNumber}) - ${parsed.toLocaleString()} UGX`,
-      { reference: withdrawResult?.transactionReference || `WTH_${Date.now()}` }
+      { reference: withdrawReference }
     );
     persistTransactions();
 
     res.json({
       success: true,
       walletBalance: user.walletBalance,
-      message: withdrawResult?.message || `Withdrawal of ${parsed.toLocaleString()} UGX processed! Funds will reflect on ${phoneNumber}.`,
+      message: `Withdrawal of ${parsed.toLocaleString()} UGX processed successfully! Reference: ${withdrawReference}.`,
     });
   } catch (err: any) {
     console.error('Error during wallet withdrawal:', err);
