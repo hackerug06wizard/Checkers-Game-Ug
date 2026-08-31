@@ -83,6 +83,30 @@ class PesapalService {
     return Boolean(config.consumerKey && config.consumerSecret);
   }
 
+  public setExplicitIpnId(id: string) {
+    if (!id) return;
+    this.ipnId = id.trim();
+    try {
+      const dir = path.dirname(IPN_CACHE_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(IPN_CACHE_FILE, JSON.stringify({ ipn_id: this.ipnId, updatedAt: Date.now() }), 'utf-8');
+      console.log(`[Pesapal] Explicit IPN ID saved: ${this.ipnId}`);
+    } catch (e) {
+      console.warn('[Pesapal] Could not save IPN ID to cache file:', e);
+    }
+  }
+
+  public clearCachedIpn() {
+    this.ipnId = null;
+    try {
+      if (fs.existsSync(IPN_CACHE_FILE)) {
+        fs.unlinkSync(IPN_CACHE_FILE);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
   /**
    * Request Bearer token from Pesapal Authentication API
    */
@@ -137,7 +161,7 @@ class PesapalService {
   /**
    * Fetch registered IPN list from Pesapal
    */
-  public async getRegisteredIpns(): Promise<Array<{ ipn_id: string; url: string }>> {
+  public async getRegisteredIpns(): Promise<Array<{ ipn_id: string; url: string; created_date?: string }>> {
     const token = await this.getAuthToken();
     if (!token) return [];
 
@@ -159,6 +183,7 @@ class PesapalService {
             .map((item: any) => ({
               ipn_id: item.ipn_id || item.notification_id,
               url: item.url || '',
+              created_date: item.created_date || item.date_created,
             }));
         }
       }
@@ -171,49 +196,57 @@ class PesapalService {
   /**
    * Auto-register or fetch existing IPN URL
    */
-  public async getOrRegisterIpnId(appBaseUrl: string): Promise<string | null> {
+  public async getOrRegisterIpnId(appBaseUrl: string, forceFresh: boolean = false): Promise<string | null> {
     const config = this.getConfig();
-    if (config.ipnId) {
+    if (config.ipnId && !forceFresh) {
       return config.ipnId;
     }
 
-    if (this.ipnId) {
+    if (this.ipnId && !forceFresh) {
       return this.ipnId;
     }
 
-    // Try reading cached IPN ID from disk
-    try {
-      if (fs.existsSync(IPN_CACHE_FILE)) {
-        const raw = fs.readFileSync(IPN_CACHE_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (parsed.ipn_id) {
-          this.ipnId = parsed.ipn_id;
-          return this.ipnId;
+    // Try reading cached IPN ID from disk if not forcing fresh
+    if (!forceFresh) {
+      try {
+        if (fs.existsSync(IPN_CACHE_FILE)) {
+          const raw = fs.readFileSync(IPN_CACHE_FILE, 'utf-8');
+          const parsed = JSON.parse(raw);
+          if (parsed.ipn_id) {
+            this.ipnId = parsed.ipn_id;
+            return this.ipnId;
+          }
         }
+      } catch (e) {
+        // ignore
       }
-    } catch (e) {
-      // ignore
     }
 
     const token = await this.getAuthToken();
     if (!token) return null;
 
-    // 1. Check existing IPN list first
+    // 1. Check existing IPN list first from live Pesapal account
     const existingList = await this.getRegisteredIpns();
     if (existingList.length > 0) {
-      // Prefer matching URL or use the first available IPN
-      const match = existingList.find((item) => item.url && item.url.includes('/api/pesapal/ipn')) || existingList[0];
+      // Find one that matches our IPN path or use the newest registered IPN
+      const match = existingList.find((item) => item.url && item.url.includes('/api/pesapal/ipn')) || existingList[existingList.length - 1];
       if (match && match.ipn_id) {
         this.ipnId = match.ipn_id;
-        console.log(`[Pesapal] Reusing existing IPN ID: ${this.ipnId}`);
+        this.setExplicitIpnId(this.ipnId);
+        console.log(`[Pesapal] Found active IPN ID from account: ${this.ipnId} (${match.url})`);
         return this.ipnId;
       }
     }
 
-    // 2. Register new IPN if none found
+    // 2. Register new IPN if none found or fresh requested
     try {
-      const cleanBase = appBaseUrl ? appBaseUrl.replace(/\/$/, '') : 'https://checkersarena-beta.vercel.app';
-      const ipnCallbackUrl = `${cleanBase}/api/pesapal/ipn`;
+      // Determine the best public URL
+      let targetDomain = 'checkersarena-beta.vercel.app';
+      if (appBaseUrl && !appBaseUrl.includes('localhost') && !appBaseUrl.includes('127.0.0.1')) {
+        targetDomain = appBaseUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      }
+
+      const ipnCallbackUrl = `https://${targetDomain}/api/pesapal/ipn`;
       const url = `${this.getBaseUrl()}/URLSetup/RegisterIPN`;
       console.log(`[Pesapal] Registering IPN URL: ${ipnCallbackUrl}`);
 
@@ -231,16 +264,10 @@ class PesapalService {
       });
 
       if (response.ok) {
-        const data = (await response.json()) as { ipn_id: string; status: string };
+        const data = (await response.json()) as { ipn_id: string; status: string; url?: string };
         if (data && data.ipn_id) {
           this.ipnId = data.ipn_id;
-          try {
-            const dir = path.dirname(IPN_CACHE_FILE);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(IPN_CACHE_FILE, JSON.stringify({ ipn_id: data.ipn_id, registeredAt: Date.now() }), 'utf-8');
-          } catch (err) {
-            console.warn('[Pesapal] Could not save IPN cache file:', err);
-          }
+          this.setExplicitIpnId(data.ipn_id);
           console.log(`[Pesapal] IPN registered successfully! IPN ID: ${data.ipn_id}`);
           return this.ipnId;
         }
@@ -249,10 +276,11 @@ class PesapalService {
         console.warn('[Pesapal] RegisterIPN response:', errText);
       }
 
-      // Retry fetching list in case it was created concurrently
+      // Retry fetching list
       const listAfter = await this.getRegisteredIpns();
       if (listAfter.length > 0 && listAfter[0].ipn_id) {
         this.ipnId = listAfter[0].ipn_id;
+        this.setExplicitIpnId(this.ipnId);
         return this.ipnId;
       }
 
@@ -264,9 +292,9 @@ class PesapalService {
   }
 
   /**
-   * Submit Order Request to Pesapal v3
+   * Submit Order Request to Pesapal v3 with auto-retry on invalid IPN
    */
-  public async submitOrder(params: PesapalOrderParams, appBaseUrl: string): Promise<PesapalOrderResult> {
+  public async submitOrder(params: PesapalOrderParams, appBaseUrl: string, isRetry: boolean = false): Promise<PesapalOrderResult> {
     const config = this.getConfig();
     const token = await this.getAuthToken();
 
@@ -275,11 +303,7 @@ class PesapalService {
     }
 
     const merchantRef = `CHK_DEP_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-    const ipnId = await this.getOrRegisterIpnId(appBaseUrl);
-
-    if (!ipnId) {
-      console.warn('[Pesapal] IPN registration not found, attempting fallback order submission...');
-    }
+    const ipnId = await this.getOrRegisterIpnId(appBaseUrl, isRetry);
 
     const url = `${this.getBaseUrl()}/Transactions/SubmitOrderRequest`;
     const currency = params.currency || config.currency || 'UGX';
@@ -344,6 +368,18 @@ class PesapalService {
       data = JSON.parse(responseText);
     } catch (e) {
       throw new Error(`Pesapal order failed (${response.status}): ${responseText.substring(0, 150)}`);
+    }
+
+    // Check if error is related to invalid IPN ID and auto-retry once with fresh IPN
+    const rawError = JSON.stringify(data).toLowerCase();
+    if (
+      !isRetry &&
+      (!response.ok || data.status !== '200') &&
+      (rawError.includes('ipn') || rawError.includes('notification_id') || rawError.includes('invalid ipn'))
+    ) {
+      console.warn('[Pesapal] Detected Invalid IPN ID error. Re-registering IPN with Pesapal and retrying order...');
+      this.clearCachedIpn();
+      return this.submitOrder(params, appBaseUrl, true);
     }
 
     if (!response.ok || (data.status && data.status !== '200' && data.status !== 200)) {

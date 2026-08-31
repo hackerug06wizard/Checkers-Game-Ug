@@ -424,11 +424,14 @@ app.get('/api/pesapal/verify-status', async (req, res) => {
   }
 });
 
-// Pesapal IPN Webhook Receiver
-app.post('/api/pesapal/ipn', async (req, res) => {
+// Pesapal IPN Webhook Receiver (Handles both GET ping and POST webhook from Pesapal)
+app.all('/api/pesapal/ipn', async (req, res) => {
   try {
-    const { OrderTrackingId, OrderMerchantReference, OrderNotificationType } = req.body || req.query;
-    console.log('[Pesapal IPN Webhook] Received:', { OrderTrackingId, OrderMerchantReference, OrderNotificationType });
+    const OrderTrackingId = (req.body?.OrderTrackingId || req.query?.OrderTrackingId || req.body?.orderTrackingId || req.query?.orderTrackingId) as string | undefined;
+    const OrderMerchantReference = (req.body?.OrderMerchantReference || req.query?.OrderMerchantReference || req.body?.orderMerchantReference || req.query?.orderMerchantReference) as string | undefined;
+    const OrderNotificationType = (req.body?.OrderNotificationType || req.query?.OrderNotificationType || req.body?.orderNotificationType || req.query?.orderNotificationType) as string | undefined;
+
+    console.log('[Pesapal IPN Webhook] Received:', { method: req.method, OrderTrackingId, OrderMerchantReference, OrderNotificationType });
 
     if (OrderTrackingId) {
       const status = await pesapalService.getTransactionStatus(OrderTrackingId);
@@ -448,17 +451,40 @@ app.post('/api/pesapal/ipn', async (req, res) => {
       }
     }
 
-    // Pesapal IPN response standard
+    // Pesapal IPN standard acknowledgment
     res.json({
       orderNotificationType: OrderNotificationType || 'IPNCHANGE',
-      orderTrackingId: OrderTrackingId,
-      orderMerchantReference: OrderMerchantReference,
+      orderTrackingId: OrderTrackingId || '',
+      orderMerchantReference: OrderMerchantReference || '',
       status: '200',
     });
   } catch (err) {
     console.error('[Pesapal IPN] Error handling webhook:', err);
-    res.status(500).json({ status: '500', error: 'IPN Processing error' });
+    res.status(200).json({ status: '200', note: 'Acknowledged' });
   }
+});
+
+// Pesapal IPN Helper / Info Endpoint
+app.all('/api/pesapal/ipn-config', async (req, res) => {
+  const host = req.get('host') || 'checkersarena-beta.vercel.app';
+  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+  const appBaseUrl = `${protocol}://${host}`;
+  const ipnUrl = `https://${host.replace(/\/$/, '')}/api/pesapal/ipn`;
+
+  if (req.method === 'POST' && req.body?.ipnId) {
+    pesapalService.setExplicitIpnId(req.body.ipnId);
+  }
+
+  const registeredIpns = await pesapalService.getRegisteredIpns();
+  const currentIpnId = await pesapalService.getOrRegisterIpnId(appBaseUrl);
+
+  res.json({
+    success: true,
+    merchantDomain: host.replace(/^https?:\/\//, ''),
+    merchantIpnListenerUrl: ipnUrl,
+    activeIpnId: currentIpnId,
+    registeredIpns,
+  });
 });
 
 // Wallet Transactions History API
