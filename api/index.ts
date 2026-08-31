@@ -117,49 +117,26 @@ app.post(['/api/pesapal/initiate-deposit', '/api/pesapal/initiate-order'], async
     const origin = req.headers.origin || `https://${req.headers.host}`;
     const callbackUrl = `${origin}?payment_ref=pending`;
 
-    let orderResult: PesapalOrderResult;
-    try {
-      orderResult = await pesapalService.submitOrder(
-        {
-          userId,
-          username: username || 'Player',
-          amount: parsedAmount,
-          currency: currency || 'UGX',
-          email,
-          phoneNumber,
-          description: description || `Deposit ${parsedAmount} ${currency || 'UGX'} into Checkers Arena`,
-          callbackUrl,
-        },
-        origin
-      );
-    } catch (orderErr: any) {
-      console.error('pesapalService.submitOrder error:', orderErr);
-      // Generate guaranteed fallback checkout
-      const merchantRef = `CHK_DEP_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-      orderResult = {
-        order_tracking_id: `DEMO_TRK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        merchant_reference: merchantRef,
-        redirect_url: `/api/pesapal/mock-checkout?ref=${merchantRef}&amount=${parsedAmount}&currency=${currency || 'UGX'}&userId=${userId}`,
-        status: '200',
-      };
-    }
-
-    if (!orderResult || !orderResult.redirect_url) {
-      const merchantRef = `CHK_DEP_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-      orderResult = {
-        order_tracking_id: `DEMO_TRK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        merchant_reference: merchantRef,
-        redirect_url: `/api/pesapal/mock-checkout?ref=${merchantRef}&amount=${parsedAmount}&currency=${currency || 'UGX'}&userId=${userId}`,
-        status: '200',
-      };
-    }
+    const orderResult = await pesapalService.submitOrder(
+      {
+        userId,
+        username: username || 'Player',
+        amount: parsedAmount,
+        currency: currency || 'UGX',
+        email,
+        phoneNumber,
+        description: description || `Deposit ${parsedAmount} ${currency || 'UGX'} into Checkers Arena`,
+        callbackUrl,
+      },
+      origin
+    );
 
     // Record pending transaction
     recordTransaction(
       userId,
       'deposit',
       parsedAmount,
-      `Pending deposit via Pesapal (${parsedAmount} ${currency || 'UGX'})`,
+      `Deposit via Pesapal (${parsedAmount} ${currency || 'UGX'})`,
       {
         reference: orderResult.merchant_reference,
         pesapalTrackingId: orderResult.order_tracking_id,
@@ -174,7 +151,6 @@ app.post(['/api/pesapal/initiate-deposit', '/api/pesapal/initiate-order'], async
       redirectUrl: orderResult.redirect_url,
       amount: parsedAmount,
       currency: currency || 'UGX',
-      isSandboxDemo: orderResult.order_tracking_id?.startsWith('DEMO_TRK_'),
     });
   } catch (err: any) {
     console.error('Error initiating Pesapal deposit:', err);
@@ -319,76 +295,6 @@ app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
     walletBalance: user.walletBalance,
     message: `Withdrawal request for ${parsed.toLocaleString()} UGX submitted. Funds will be sent to ${phoneNumber}.`,
   });
-});
-
-// Simulated Pesapal Interactive Checkout page (For demo/sandbox testing)
-app.get('/api/pesapal/mock-checkout', (req: Request, res: Response) => {
-  const { ref, amount, currency, userId } = req.query;
-  const amt = amount || '5000';
-  const curr = currency || 'UGX';
-  const user = userId ? usersMap.get(String(userId)) : null;
-  const username = user?.username || 'Player';
-
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pesapal Secure Payment Gateway</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex items-center justify-center p-4">
-  <div class="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
-    <div class="flex items-center justify-between border-b border-slate-800 pb-4">
-      <div class="flex items-center gap-2.5">
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-red-600 flex items-center justify-center font-black text-slate-950 text-xl shadow">
-          P
-        </div>
-        <div>
-          <h2 class="font-black text-lg text-white">Pesapal Checkout</h2>
-          <p class="text-xs text-amber-400 font-semibold">Checkers Arena Pay</p>
-        </div>
-      </div>
-      <span class="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold border border-amber-500/30">
-        Demo Sandbox
-      </span>
-    </div>
-
-    <div class="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-4 space-y-2">
-      <div class="flex justify-between text-xs text-slate-400">
-        <span>Account:</span>
-        <span class="text-white font-bold">${username}</span>
-      </div>
-      <div class="flex justify-between text-xs text-slate-400">
-        <span>Reference:</span>
-        <span class="font-mono text-slate-300">${ref || 'CHK_DEMO_ORDER'}</span>
-      </div>
-      <div class="flex justify-between text-sm pt-2 border-t border-slate-800">
-        <span class="font-bold text-slate-200">Amount Due:</span>
-        <span class="font-black text-amber-400 text-base">${Number(amt).toLocaleString()} ${curr}</span>
-      </div>
-    </div>
-
-    <div class="space-y-3 pt-2">
-      <button onclick="approvePayment()" class="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-sm shadow-lg transition active:scale-95 cursor-pointer">
-        Simulate Instant Payment (Approve)
-      </button>
-      <button onclick="window.close()" class="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white font-bold text-xs transition cursor-pointer">
-        Cancel & Return
-      </button>
-    </div>
-  </div>
-
-  <script>
-    function approvePayment() {
-      document.body.innerHTML = '<div class="text-center space-y-3 p-8"><div class="text-emerald-400 text-4xl">✓</div><h2 class="text-xl font-black text-white">Payment Approved!</h2><p class="text-xs text-slate-400">Closing window and crediting your wallet...</p></div>';
-      setTimeout(() => {
-        window.close();
-      }, 1500);
-    }
-  </script>
-</body>
-</html>`);
 });
 
 // Export Express app for Vercel Serverless

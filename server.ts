@@ -316,48 +316,26 @@ app.post(['/api/pesapal/initiate-deposit', '/api/pesapal/initiate-order'], async
     const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
     const callbackUrl = `${origin}?payment_ref=pending`;
 
-    let orderResult: PesapalOrderResult;
-    try {
-      orderResult = await pesapalService.submitOrder(
-        {
-          userId,
-          username,
-          amount: parsedAmount,
-          currency: currency || 'UGX',
-          email,
-          phoneNumber,
-          description: description || `Deposit ${parsedAmount} ${currency || 'UGX'} into Checkers Arena`,
-          callbackUrl,
-        },
-        origin
-      );
-    } catch (orderErr: any) {
-      console.error('pesapalService.submitOrder error in server.ts:', orderErr);
-      const merchantRef = `CHK_DEP_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-      orderResult = {
-        order_tracking_id: `DEMO_TRK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        merchant_reference: merchantRef,
-        redirect_url: `/api/pesapal/mock-checkout?ref=${merchantRef}&amount=${parsedAmount}&currency=${currency || 'UGX'}&userId=${userId}`,
-        status: '200',
-      };
-    }
-
-    if (!orderResult || !orderResult.redirect_url) {
-      const merchantRef = `CHK_DEP_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-      orderResult = {
-        order_tracking_id: `DEMO_TRK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        merchant_reference: merchantRef,
-        redirect_url: `/api/pesapal/mock-checkout?ref=${merchantRef}&amount=${parsedAmount}&currency=${currency || 'UGX'}&userId=${userId}`,
-        status: '200',
-      };
-    }
+    const orderResult = await pesapalService.submitOrder(
+      {
+        userId,
+        username,
+        amount: parsedAmount,
+        currency: currency || 'UGX',
+        email,
+        phoneNumber,
+        description: description || `Deposit ${parsedAmount} ${currency || 'UGX'} into Checkers Arena`,
+        callbackUrl,
+      },
+      origin
+    );
 
     // Record pending transaction
     recordTransaction(
       userId,
       'deposit',
       parsedAmount,
-      `Pending deposit via Pesapal (${parsedAmount} ${currency || 'UGX'})`,
+      `Deposit via Pesapal (${parsedAmount} ${currency || 'UGX'})`,
       {
         reference: orderResult.merchant_reference,
         pesapalTrackingId: orderResult.order_tracking_id,
@@ -372,7 +350,6 @@ app.post(['/api/pesapal/initiate-deposit', '/api/pesapal/initiate-order'], async
       redirectUrl: orderResult.redirect_url,
       amount: parsedAmount,
       currency: currency || 'UGX',
-      isSandboxDemo: orderResult.order_tracking_id?.startsWith('DEMO_TRK_'),
     });
   } catch (err: any) {
     console.error('Error initiating Pesapal deposit:', err);
@@ -553,108 +530,6 @@ app.post('/api/wallet/withdraw', async (req, res) => {
     console.error('Error during wallet withdrawal:', err);
     res.status(500).json({ success: false, message: err.message || 'Withdrawal failed' });
   }
-});
-
-// Simulated Pesapal Interactive Checkout page (For demo/sandbox testing)
-app.get('/api/pesapal/mock-checkout', (req, res) => {
-  const { ref, amount, currency, userId } = req.query;
-  const amt = amount || '5000';
-  const curr = currency || 'UGX';
-  const user = userId ? usersMap.get(String(userId)) : null;
-  const username = user?.username || 'Player';
-
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pesapal Secure Payment Gateway</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex items-center justify-center p-4">
-  <div class="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
-    <div class="flex items-center justify-between border-b border-slate-800 pb-4">
-      <div class="flex items-center gap-2.5">
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-red-600 flex items-center justify-center font-black text-slate-950 text-xl shadow">
-          P
-        </div>
-        <div>
-          <h2 class="font-black text-lg text-white">Pesapal Checkout</h2>
-          <p class="text-xs text-amber-400 font-semibold">Checkers Arena Pay</p>
-        </div>
-      </div>
-      <span class="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold border border-amber-500/30">
-        Sandbox / Demo
-      </span>
-    </div>
-
-    <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
-      <div class="flex justify-between text-xs text-slate-400">
-        <span>Account Player</span>
-        <span class="text-white font-bold">${username}</span>
-      </div>
-      <div class="flex justify-between text-xs text-slate-400">
-        <span>Order Reference</span>
-        <span class="font-mono text-slate-300">${ref || 'CHK_DEMO'}</span>
-      </div>
-      <div class="border-t border-slate-800 pt-2 flex justify-between items-center">
-        <span class="text-xs font-bold text-slate-300">Amount Due:</span>
-        <span class="text-xl font-black text-amber-400">${Number(amt).toLocaleString()} ${curr}</span>
-      </div>
-    </div>
-
-    <div class="space-y-3">
-      <p class="text-xs font-bold text-slate-300">Select Payment Method:</p>
-      <div class="grid grid-cols-2 gap-2 text-xs">
-        <div class="p-3 rounded-xl bg-slate-800/80 border-2 border-amber-500 flex flex-col items-center gap-1">
-          <span class="font-bold text-amber-300">📱 MTN MoMo</span>
-          <span class="text-[10px] text-slate-400">*165# Prompt</span>
-        </div>
-        <div class="p-3 rounded-xl bg-slate-800/80 border border-slate-700 flex flex-col items-center gap-1">
-          <span class="font-bold text-rose-300">🔴 Airtel Money</span>
-          <span class="text-[10px] text-slate-400">*185# Prompt</span>
-        </div>
-      </div>
-    </div>
-
-    <button id="payBtn" onclick="confirmPayment()" class="w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-sm transition shadow-lg flex items-center justify-center gap-2 cursor-pointer active:scale-98">
-      <span>Complete Payment (${Number(amt).toLocaleString()} ${curr})</span>
-    </button>
-
-    <p class="text-[11px] text-slate-400 text-center">
-      Protected by 256-bit SSL encryption. Pesapal Payment Gateway.
-    </p>
-  </div>
-
-  <script>
-    async function confirmPayment() {
-      const btn = document.getElementById('payBtn');
-      btn.innerHTML = '<span>Processing Mobile Money PIN Prompt...</span>';
-      btn.disabled = true;
-
-      try {
-        const res = await fetch('/api/pesapal/verify-status?orderTrackingId=DEMO_TRK_${Date.now()}&merchantReference=${ref}&userId=${userId}', { credentials: 'omit' });
-        const data = await res.json();
-        
-        btn.innerHTML = '<span>✅ Payment Approved! Redirecting...</span>';
-        btn.className = 'w-full py-3.5 rounded-xl bg-emerald-500 text-slate-950 font-black text-sm flex items-center justify-center';
-        
-        setTimeout(() => {
-          if (window.opener) {
-            window.opener.postMessage({ type: 'PESAPAL_PAYMENT_SUCCESS', ref: '${ref}', amount: '${amt}' }, '*');
-            window.close();
-          } else {
-            window.location.href = '/?payment_success=true&amount=${amt}';
-          }
-        }, 1200);
-      } catch(e) {
-        btn.innerHTML = '<span>Retry Payment</span>';
-        btn.disabled = false;
-      }
-    }
-  </script>
-</body>
-</html>`);
 });
 
 // Username Validation API

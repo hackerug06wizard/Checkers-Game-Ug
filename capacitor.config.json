@@ -3,6 +3,15 @@
   "appName": "Checkers Arena",
   "webDir": "dist",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "cleartext": true,
+    "allowNavigation": [
+      "pay.pesapal.com",
+      "*.pesapal.com",
+      "*.firebaseio.com",
+      "*.googleapis.com",
+      "*.run.app",
+      "*.vercel.app"
+    ]
   }
 }

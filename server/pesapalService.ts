@@ -4,7 +4,7 @@ import path from 'path';
 export interface PesapalConfig {
   consumerKey: string;
   consumerSecret: string;
-  environment: 'sandbox' | 'live';
+  environment: 'live' | 'sandbox';
   currency: string;
   ipnId?: string;
 }
@@ -51,21 +51,21 @@ class PesapalService {
   private tokenExpiry: number = 0;
   private ipnId: string | null = null;
 
-  private getConfig(): PesapalConfig {
+  public getConfig(): PesapalConfig {
     return {
       consumerKey: process.env.PESAPAL_CONSUMER_KEY || 'YdD5wiLJ3zCiIijV3Wb2xnV+7Sjugby+',
       consumerSecret: process.env.PESAPAL_CONSUMER_SECRET || 'q/nU5o64KI8OW8pDUIgl4BV9VI4=',
-      environment: (process.env.PESAPAL_ENVIRONMENT === 'sandbox' ? 'sandbox' : 'live') as 'sandbox' | 'live',
+      environment: 'live', // Strict Live Production Mode for real mobile prompt payments
       currency: process.env.PESAPAL_CURRENCY || 'UGX',
       ipnId: process.env.PESAPAL_IPN_ID || '',
     };
   }
 
-  private getBaseUrl(): string {
+  public getBaseUrl(): string {
     const config = this.getConfig();
-    return config.environment === 'live'
-      ? 'https://pay.pesapal.com/v3/api'
-      : 'https://cybqa.pesapal.com/pesapalv3/api';
+    return config.environment === 'sandbox'
+      ? 'https://cybqa.pesapal.com/pesapalv3/api'
+      : 'https://pay.pesapal.com/v3/api';
   }
 
   public isConfigured(): boolean {
@@ -90,8 +90,8 @@ class PesapalService {
 
     try {
       const url = `${this.getBaseUrl()}/Auth/RequestToken`;
-      console.log(`[Pesapal] Requesting auth token from ${url} (${config.environment})...`);
-      
+      console.log(`[Pesapal Live] Requesting auth token from ${url}...`);
+
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -106,21 +106,20 @@ class PesapalService {
 
       if (!response.ok) {
         const errText = await response.text();
-        console.error(`[Pesapal] Auth Token request failed (${response.status}):`, errText);
+        console.error(`[Pesapal Live] Auth Token request failed (${response.status}):`, errText);
         return null;
       }
 
       const data = (await response.json()) as { token: string; expiryDate: string; status: string };
       if (data && data.token) {
         this.token = data.token;
-        // Expiry is typically 5 minutes (300 seconds)
         this.tokenExpiry = now + 4 * 60 * 1000;
-        console.log('[Pesapal] Auth token received successfully.');
+        console.log('[Pesapal Live] Auth token received successfully.');
         return this.token;
       }
       return null;
     } catch (err) {
-      console.error('[Pesapal] Exception requesting auth token:', err);
+      console.error('[Pesapal Live] Exception requesting auth token:', err);
       return null;
     }
   }
@@ -158,7 +157,7 @@ class PesapalService {
     try {
       const ipnCallbackUrl = `${appBaseUrl.replace(/\/$/, '')}/api/pesapal/ipn`;
       const url = `${this.getBaseUrl()}/URLSetup/RegisterIPN`;
-      console.log(`[Pesapal] Registering IPN URL: ${ipnCallbackUrl}`);
+      console.log(`[Pesapal Live] Registering IPN URL: ${ipnCallbackUrl}`);
 
       const response = await fetch(url, {
         method: 'POST',
@@ -175,7 +174,7 @@ class PesapalService {
 
       if (!response.ok) {
         const errText = await response.text();
-        console.error('[Pesapal] IPN Registration failed:', errText);
+        console.error('[Pesapal Live] IPN Registration failed:', errText);
         return null;
       }
 
@@ -189,132 +188,101 @@ class PesapalService {
         } catch (err) {
           console.warn('[Pesapal] Could not save IPN cache file:', err);
         }
-        console.log(`[Pesapal] IPN registered successfully! IPN ID: ${data.ipn_id}`);
+        console.log(`[Pesapal Live] IPN registered successfully! IPN ID: ${data.ipn_id}`);
         return this.ipnId;
       }
       return null;
     } catch (err) {
-      console.error('[Pesapal] Exception registering IPN:', err);
+      console.error('[Pesapal Live] Exception registering IPN:', err);
       return null;
     }
   }
 
   /**
-   * Submit Order Request to Pesapal v3
+   * Submit Order Request to Pesapal Live v3
    */
   public async submitOrder(params: PesapalOrderParams, appBaseUrl: string): Promise<PesapalOrderResult> {
     const config = this.getConfig();
     const token = await this.getAuthToken();
 
-    const merchantRef = `CHK_DEP_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-
-    // If Pesapal credentials are not configured or token fails, generate safe sandbox demo simulation
     if (!token) {
-      console.log('[Pesapal Demo Mode] Generating demo checkout session for testing...');
-      return {
-        order_tracking_id: `DEMO_TRK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        merchant_reference: merchantRef,
-        redirect_url: `/api/pesapal/mock-checkout?ref=${merchantRef}&amount=${params.amount}&currency=${params.currency || config.currency}&userId=${params.userId}`,
-        status: '200',
-      };
+      throw new Error('Pesapal Live Authentication failed. Please verify Consumer Key & Consumer Secret.');
     }
 
+    const merchantRef = `CHK_DEP_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
     const ipnId = await this.getOrRegisterIpnId(appBaseUrl);
 
-    try {
-      const url = `${this.getBaseUrl()}/Transactions/SubmitOrderRequest`;
-      const currency = params.currency || config.currency;
+    const url = `${this.getBaseUrl()}/Transactions/SubmitOrderRequest`;
+    const currency = params.currency || config.currency || 'UGX';
 
-      // Clean phone number format for Mobile Money in East Africa (UG: 256, KE: 254)
-      let phone = params.phoneNumber?.replace(/\D/g, '') || '';
-      if (phone.startsWith('0')) {
-        phone = '256' + phone.substring(1);
-      } else if (phone.length === 9) {
-        phone = '256' + phone;
-      }
-      if (!phone) phone = '256700000000';
-
-      const payload = {
-        id: merchantRef,
-        currency: currency,
-        amount: Number(params.amount),
-        description: params.description || `Checkers Arena Wallet Deposit (${params.amount} ${currency})`,
-        callback_url: params.callbackUrl,
-        notification_id: ipnId || undefined,
-        billing_address: {
-          email_address: params.email || `${params.username.toLowerCase().replace(/[^a-z0-9]/g, '')}@checkersarena.com`,
-          phone_number: phone,
-          country_code: 'UG',
-          first_name: params.username || 'Checkers',
-          last_name: 'Player',
-        },
-      };
-
-      console.log(`[Pesapal] Submitting order to ${url}:`, JSON.stringify(payload, null, 2));
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        console.error(`[Pesapal] Order submission failed (${response.status}):`, errText);
-        throw new Error(`Pesapal order submission returned status ${response.status}: ${errText}`);
-      }
-
-      const data = (await response.json()) as PesapalOrderResult;
-      console.log('[Pesapal] Order created response:', data);
-
-      if (!data || !data.redirect_url) {
-        console.warn('[Pesapal] No redirect_url returned in Pesapal response, using fallback simulated payment:', data);
-        return {
-          order_tracking_id: data?.order_tracking_id || `DEMO_TRK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          merchant_reference: data?.merchant_reference || merchantRef,
-          redirect_url: `/api/pesapal/mock-checkout?ref=${merchantRef}&amount=${params.amount}&currency=${params.currency || config.currency}&userId=${params.userId}`,
-          status: '200',
-        };
-      }
-
-      return data;
-    } catch (err: any) {
-      console.error('[Pesapal] Exception submitting order:', err);
-      // Fallback to simulated checkout if external gateway is blocked, unreachable, or credentials pending approval
-      return {
-        order_tracking_id: `DEMO_TRK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        merchant_reference: merchantRef,
-        redirect_url: `/api/pesapal/mock-checkout?ref=${merchantRef}&amount=${params.amount}&currency=${params.currency || config.currency}&userId=${params.userId}`,
-        status: '200',
-      };
+    // Format phone number for MTN MoMo & Airtel Money (UG: 256...)
+    let phone = params.phoneNumber?.replace(/\D/g, '') || '';
+    if (phone.startsWith('0')) {
+      phone = '256' + phone.substring(1);
+    } else if (phone.length === 9) {
+      phone = '256' + phone;
     }
+    if (!phone || phone.length < 9) {
+      phone = '256794915844';
+    }
+
+    const payload: any = {
+      id: merchantRef,
+      currency: currency,
+      amount: Number(params.amount),
+      description: params.description || `Checkers Arena Deposit (${params.amount} ${currency})`,
+      callback_url: params.callbackUrl,
+      billing_address: {
+        email_address: params.email || `${params.username.toLowerCase().replace(/[^a-z0-9]/g, '') || 'player'}@checkersarena.ug`,
+        phone_number: phone,
+        country_code: 'UG',
+        first_name: params.username || 'Checkers',
+        last_name: 'Player',
+      },
+    };
+
+    if (ipnId) {
+      payload.notification_id = ipnId;
+    }
+
+    console.log(`[Pesapal Live] Submitting real order to ${url}:`, JSON.stringify(payload, null, 2));
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`[Pesapal Live] Order submission failed (${response.status}):`, errText);
+      throw new Error(`Pesapal order failed (${response.status}): ${errText}`);
+    }
+
+    const data = (await response.json()) as PesapalOrderResult;
+    console.log('[Pesapal Live] Real order created response:', data);
+
+    if (!data || !data.redirect_url) {
+      throw new Error('Pesapal did not return a valid checkout redirect URL.');
+    }
+
+    return data;
   }
 
   /**
-   * Get Transaction Status from Pesapal
+   * Get Transaction Status from Pesapal Live
    */
   public async getTransactionStatus(orderTrackingId: string): Promise<PesapalTransactionStatus | null> {
-    if (orderTrackingId.startsWith('DEMO_TRK_')) {
-      return {
-        status_code: 0,
-        payment_status_description: 'Pending',
-        amount: 5000,
-        merchant_reference: orderTrackingId,
-        currency: 'UGX',
-        payment_method: 'Mobile Money',
-      };
-    }
-
     const token = await this.getAuthToken();
     if (!token) return null;
 
     try {
       const url = `${this.getBaseUrl()}/Transactions/GetTransactionStatus?orderTrackingId=${encodeURIComponent(orderTrackingId)}`;
-      console.log(`[Pesapal] Querying transaction status: ${url}`);
+      console.log(`[Pesapal Live] Querying transaction status: ${url}`);
 
       const response = await fetch(url, {
         method: 'GET',
@@ -326,15 +294,15 @@ class PesapalService {
 
       if (!response.ok) {
         const errText = await response.text();
-        console.error(`[Pesapal] Status check failed (${response.status}):`, errText);
+        console.error(`[Pesapal Live] Status check failed (${response.status}):`, errText);
         return null;
       }
 
       const data = (await response.json()) as PesapalTransactionStatus;
-      console.log('[Pesapal] Transaction status result:', data);
+      console.log('[Pesapal Live] Transaction status result:', data);
       return data;
     } catch (err) {
-      console.error('[Pesapal] Exception checking status:', err);
+      console.error('[Pesapal Live] Exception checking status:', err);
       return null;
     }
   }

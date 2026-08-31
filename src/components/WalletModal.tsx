@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile, STAKE_TIERS, WalletTransaction } from '../types';
+import { apiFetchJson } from '../lib/api';
 import {
   Wallet,
   ArrowUpRight,
@@ -9,13 +10,14 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
-  Sparkles,
   RefreshCw,
   ShieldCheck,
   Check,
   CreditCard,
   Lock,
   ArrowLeft,
+  ExternalLink,
+  Smartphone,
 } from 'lucide-react';
 
 interface WalletModalProps {
@@ -36,7 +38,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [activeTab, setActiveTab] = useState<'deposit' | 'withdraw' | 'history'>(initialTab);
   const [depositAmount, setDepositAmount] = useState<number>(5000);
   const [customAmount, setCustomAmount] = useState<string>('');
-  const [phoneNumber, setPhoneNumber] = useState<string>('');
+  const [phoneNumber, setPhoneNumber] = useState<string>(currentUser.phoneNumber || '');
   const [provider, setProvider] = useState<'mtn' | 'airtel'>('mtn');
 
   const [loading, setLoading] = useState<boolean>(false);
@@ -44,10 +46,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [transactionsLoading, setTransactionsLoading] = useState<boolean>(false);
 
-  // In-App Pesapal Embedded Checkout (No external redirects)
-  const [pesapalIframeUrl, setPesapalIframeUrl] = useState<string | null>(null);
+  // Live Pesapal In-App & Push Checkout
+  const [pesapalCheckoutUrl, setPesapalCheckoutUrl] = useState<string | null>(null);
   const [activeOrderTrackingId, setActiveOrderTrackingId] = useState<string | null>(null);
   const [activeMerchantRef, setActiveMerchantRef] = useState<string | null>(null);
+  const [isVerifying, setIsVerifying] = useState<boolean>(false);
 
   const pollIntervalRef = useRef<any>(null);
 
@@ -63,49 +66,41 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   }, [isOpen, currentUser.id]);
 
   const resetActivePayment = () => {
-    setPesapalIframeUrl(null);
+    setPesapalCheckoutUrl(null);
     setActiveOrderTrackingId(null);
     setActiveMerchantRef(null);
+    setIsVerifying(false);
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
   };
 
   const handlePhoneChange = (val: string) => {
     setPhoneNumber(val);
     const clean = val.replace(/[\s\-\+]/g, '');
-    if (clean.startsWith('077') || clean.startsWith('078') || clean.startsWith('076') || clean.startsWith('25677') || clean.startsWith('25678')) {
+    if (
+      clean.startsWith('077') ||
+      clean.startsWith('078') ||
+      clean.startsWith('076') ||
+      clean.startsWith('25677') ||
+      clean.startsWith('25678') ||
+      clean.startsWith('25676')
+    ) {
       setProvider('mtn');
-    } else if (clean.startsWith('070') || clean.startsWith('075') || clean.startsWith('074') || clean.startsWith('25670') || clean.startsWith('25675')) {
+    } else if (
+      clean.startsWith('070') ||
+      clean.startsWith('075') ||
+      clean.startsWith('074') ||
+      clean.startsWith('25670') ||
+      clean.startsWith('25675') ||
+      clean.startsWith('25674')
+    ) {
       setProvider('airtel');
-    }
-  };
-
-  const safeFetchJson = async (url: string, options?: RequestInit) => {
-    try {
-      const res = await fetch(url, options);
-      const text = await res.text();
-      try {
-        const json = JSON.parse(text);
-        return { ok: res.ok, status: res.status, data: json };
-      } catch {
-        return {
-          ok: false,
-          status: res.status,
-          data: { success: false, message: text && text.length < 200 ? text : `Server error (${res.status})` },
-        };
-      }
-    } catch (networkErr: any) {
-      return {
-        ok: false,
-        status: 0,
-        data: { success: false, message: networkErr?.message || 'Network connection error' },
-      };
     }
   };
 
   const fetchTransactions = async () => {
     setTransactionsLoading(true);
     try {
-      const res = await safeFetchJson(`/api/wallet/transactions?userId=${currentUser.id}`);
+      const res = await apiFetchJson(`/api/wallet/transactions?userId=${currentUser.id}`);
       if (res.ok && res.data && res.data.success && Array.isArray(res.data.transactions)) {
         setTransactions(res.data.transactions);
       }
@@ -120,18 +115,23 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
   const effectiveDepositAmount = customAmount ? Number(customAmount) : depositAmount;
 
-  // 1. Initiate Pesapal In-App (No redirection away from the website or app)
+  // 1. Initiate Real Pesapal Live Order (Triggers Push prompt on Phone)
   const handleInitiatePesapalDeposit = async () => {
     if (!effectiveDepositAmount || effectiveDepositAmount < 500) {
       setStatusMessage({ type: 'error', text: 'Minimum deposit is 500 UGX' });
       return;
     }
 
+    if (!phoneNumber || phoneNumber.trim().length < 9) {
+      setStatusMessage({ type: 'error', text: 'Please enter your Mobile Money phone number to receive the prompt.' });
+      return;
+    }
+
     setLoading(true);
-    setStatusMessage({ type: 'info', text: 'Opening secure Pesapal in-app checkout...' });
+    setStatusMessage({ type: 'info', text: 'Connecting to Pesapal Live Payment Gateway...' });
 
     try {
-      const res = await safeFetchJson('/api/pesapal/initiate-order', {
+      const res = await apiFetchJson('/api/pesapal/initiate-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -139,7 +139,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           username: currentUser.username,
           email: `${currentUser.username.toLowerCase().replace(/[^a-z0-9]/g, '') || 'player'}@checkersarena.ug`,
           amount: effectiveDepositAmount,
-          phoneNumber: phoneNumber || '0770000000',
+          phoneNumber: phoneNumber.trim(),
           description: `Deposit ${effectiveDepositAmount.toLocaleString()} UGX into Checkers Arena`,
         }),
       });
@@ -149,81 +149,68 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         throw new Error(data?.message || 'Failed to initialize Pesapal checkout.');
       }
 
-      setPesapalIframeUrl(data.redirectUrl);
+      setPesapalCheckoutUrl(data.redirectUrl);
       setActiveOrderTrackingId(data.orderTrackingId || null);
       setActiveMerchantRef(data.merchantReference || null);
       setStatusMessage(null);
 
-      // Start polling for real completion from payment gateway
+      // Start automatic background verification polling every 4 seconds
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = setInterval(async () => {
         if (data.orderTrackingId || data.merchantReference) {
-          const completed = await checkPesapalPaymentStatus(data.orderTrackingId, data.merchantReference);
+          const completed = await checkPesapalPaymentStatus(data.orderTrackingId, data.merchantReference, false);
           if (completed) {
             clearInterval(pollIntervalRef.current);
           }
         }
-      }, 5000);
+      }, 4000);
     } catch (err: any) {
       console.error('Pesapal initiation error:', err);
-      setStatusMessage({ type: 'error', text: err.message || 'Payment initialization failed. Please try again.' });
+      setStatusMessage({ type: 'error', text: err.message || 'Payment initialization failed. Please check your credentials or connection.' });
     } finally {
       setLoading(false);
     }
   };
 
-  // 2. Verify Pesapal Transaction Status
-  const checkPesapalPaymentStatus = async (orderTrackingId?: string | null, merchantRef?: string | null): Promise<boolean> => {
+  // 2. Verify Pesapal Live Transaction Status
+  const checkPesapalPaymentStatus = async (
+    orderTrackingId?: string | null,
+    merchantRef?: string | null,
+    showFeedback: boolean = true
+  ): Promise<boolean> => {
+    if (showFeedback) setIsVerifying(true);
     try {
-      const url = `/api/pesapal/verify-status?userId=${currentUser.id}&orderTrackingId=${encodeURIComponent(orderTrackingId || '')}&merchantReference=${encodeURIComponent(merchantRef || '')}`;
-      const res = await safeFetchJson(url);
+      const url = `/api/pesapal/verify-status?userId=${currentUser.id}&orderTrackingId=${encodeURIComponent(
+        orderTrackingId || ''
+      )}&merchantReference=${encodeURIComponent(merchantRef || '')}`;
+      const res = await apiFetchJson(url);
       const data = res.data;
 
-      if (data && (data.completed || data.status === 'COMPLETED' || data.status === 'SUCCESSFUL')) {
+      if (data && (data.completed || data.status === 'Completed' || data.status === 'COMPLETED')) {
         setStatusMessage({
           type: 'success',
-          text: `Payment Confirmed! +${effectiveDepositAmount.toLocaleString()} UGX credited to your balance.`,
+          text: `Payment Confirmed! +${effectiveDepositAmount.toLocaleString()} UGX credited to your wallet balance.`,
         });
         onBalanceUpdated(data.walletBalance || (currentUser.walletBalance + effectiveDepositAmount));
         fetchTransactions();
-        setPesapalIframeUrl(null);
+        setPesapalCheckoutUrl(null);
+        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
         return true;
+      } else if (showFeedback) {
+        setStatusMessage({
+          type: 'info',
+          text: 'Payment is still processing on your mobile phone. Once approved with your PIN, your balance will be credited.',
+        });
       }
       return false;
     } catch {
       return false;
-    }
-  };
-
-  // 3. Practice Top-Up
-  const handleTestCredit = async (amountToAdd: number) => {
-    setLoading(true);
-    try {
-      const res = await safeFetchJson('/api/wallet/test-credit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser.id, amount: amountToAdd }),
-      });
-      const data = res.data;
-      if (data && data.success) {
-        setStatusMessage({
-          type: 'success',
-          text: `Practice funds added: +${amountToAdd.toLocaleString()} UGX`,
-        });
-        onBalanceUpdated(data.walletBalance);
-        fetchTransactions();
-      } else {
-        const newBal = (currentUser.walletBalance || 0) + amountToAdd;
-        onBalanceUpdated(newBal);
-      }
-    } catch (err) {
-      console.error(err);
     } finally {
-      setLoading(false);
+      if (showFeedback) setIsVerifying(false);
     }
   };
 
-  // 4. Withdrawal Cashout
+  // 3. Withdrawal Cashout via Mobile Money
   const handleWithdraw = async () => {
     const amt = effectiveDepositAmount;
     if (!amt || amt < 500) {
@@ -241,7 +228,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
     setLoading(true);
     try {
-      const res = await safeFetchJson('/api/wallet/withdraw', {
+      const res = await apiFetchJson('/api/wallet/withdraw', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -255,7 +242,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       if (res.ok && data && data.success) {
         setStatusMessage({
           type: 'success',
-          text: `Cashout of ${amt.toLocaleString()} UGX processed successfully!`,
+          text: `Cashout of ${amt.toLocaleString()} UGX processed successfully to ${phoneNumber.trim()}!`,
         });
         onBalanceUpdated(data.walletBalance);
         fetchTransactions();
@@ -292,7 +279,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               </h2>
               <p className="text-xs text-amber-400 font-semibold flex items-center gap-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                In-App Pesapal Checkout • Mobile Money & Cards
+                Live Pesapal Payments • MTN MoMo, Airtel & Cards
               </p>
             </div>
           </div>
@@ -321,7 +308,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         </div>
 
         {/* Navigation Tabs */}
-        {!pesapalIframeUrl && (
+        {!pesapalCheckoutUrl && (
           <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shrink-0">
             <button
               onClick={() => {
@@ -367,7 +354,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         )}
 
         {/* Status Messages */}
-        {statusMessage && !pesapalIframeUrl && (
+        {statusMessage && !pesapalCheckoutUrl && (
           <div
             className={`p-2.5 rounded-xl text-xs font-bold flex items-center gap-2 border ${
               statusMessage.type === 'success'
@@ -388,53 +375,85 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           </div>
         )}
 
-        {/* IN-APP PESAPAL EMBEDDED CHECKOUT CONTAINER (No external redirects) */}
-        {pesapalIframeUrl && (
-          <div className="flex-1 flex flex-col space-y-2 overflow-hidden min-h-[380px]">
-            <div className="flex items-center justify-between bg-slate-950 px-3 py-2 rounded-xl border border-slate-800">
+        {/* PESAPAL LIVE CHECKOUT CONTAINER & MOBILE PROMPT MONITOR */}
+        {pesapalCheckoutUrl && (
+          <div className="flex-1 flex flex-col space-y-2 overflow-hidden min-h-[390px]">
+            {/* Top Toolbar with direct link */}
+            <div className="flex items-center justify-between bg-slate-950 px-3 py-2 rounded-xl border border-slate-800 shrink-0">
               <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
-                <Lock className="w-3.5 h-3.5 text-emerald-400" />
-                <span>In-App Pesapal Secure Checkout</span>
+                <Smartphone className="w-4 h-4 text-amber-400 animate-pulse" />
+                <span>Live Pesapal Checkout</span>
               </div>
-              <button
-                onClick={resetActivePayment}
-                className="text-[11px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 cursor-pointer"
-              >
-                <ArrowLeft className="w-3 h-3" />
-                <span>Cancel / Change Amount</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <a
+                  href={pesapalCheckoutUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 underline"
+                  title="Open in new window or external browser"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  <span>Open Browser</span>
+                </a>
+                <button
+                  onClick={resetActivePayment}
+                  className="text-[11px] text-slate-400 hover:text-white font-bold flex items-center gap-1 cursor-pointer ml-1"
+                >
+                  <ArrowLeft className="w-3 h-3" />
+                  <span>Cancel</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Notification Banner about Mobile Prompt */}
+            <div className="bg-amber-950/60 border border-amber-500/40 p-2.5 rounded-xl text-[11px] text-amber-200 flex items-center gap-2 shrink-0">
+              <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin shrink-0" />
+              <span>
+                Enter your phone number in Pesapal below to receive the Mobile Money PIN prompt on your phone.
+              </span>
             </div>
 
             {/* Embedded Pesapal Payment Frame */}
-            <div className="flex-1 w-full bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-inner relative">
+            <div className="flex-1 w-full bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-inner relative min-h-[260px]">
               <iframe
-                src={pesapalIframeUrl}
-                title="Pesapal Checkout"
-                className="w-full h-full border-0 min-h-[330px] rounded-2xl"
+                src={pesapalCheckoutUrl}
+                title="Pesapal Live Checkout"
+                className="w-full h-full border-0 min-h-[260px] rounded-2xl"
                 allow="payment"
               />
             </div>
 
-            <div className="flex items-center justify-between pt-1 text-xs">
+            {/* Verification Button */}
+            <div className="pt-1 text-xs shrink-0">
               <button
-                onClick={() => checkPesapalPaymentStatus(activeOrderTrackingId, activeMerchantRef)}
-                className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition flex items-center justify-center gap-1.5 shadow-md cursor-pointer active:scale-98"
+                onClick={() => checkPesapalPaymentStatus(activeOrderTrackingId, activeMerchantRef, true)}
+                disabled={isVerifying}
+                className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition flex items-center justify-center gap-1.5 shadow-md cursor-pointer active:scale-98 disabled:opacity-50"
               >
-                <Check className="w-3.5 h-3.5" />
-                <span>I've Completed Payment (Verify & Credit Balance)</span>
+                {isVerifying ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Verifying with Pesapal...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>I've Entered PIN on My Phone (Verify & Credit Balance)</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
         )}
 
         {/* Tab 1: Deposit */}
-        {activeTab === 'deposit' && !pesapalIframeUrl && (
+        {activeTab === 'deposit' && !pesapalCheckoutUrl && (
           <div className="space-y-3.5 overflow-y-auto custom-scrollbar flex-1 pr-1">
             {/* Stake Amount Presets */}
             <div className="space-y-1.5">
               <label className="text-xs font-black text-slate-300 flex items-center justify-between">
-                <span>Select Deposit Stake Amount (UGX)</span>
-                <span className="text-[10px] text-amber-400 font-bold">Matches Stakes</span>
+                <span>Select Deposit Amount (UGX)</span>
+                <span className="text-[10px] text-amber-400 font-bold">Matches Match Stakes</span>
               </label>
 
               <div className="grid grid-cols-3 gap-2">
@@ -461,7 +480,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               <div className="pt-0.5">
                 <input
                   type="number"
-                  placeholder="Or enter custom amount (e.g. 20000)"
+                  placeholder="Or enter custom amount (e.g. 10000)"
                   value={customAmount}
                   onChange={(e) => setCustomAmount(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs font-bold focus:outline-none focus:border-amber-400"
@@ -474,9 +493,9 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
                 <span className="flex items-center gap-1">
                   <Phone className="w-3.5 h-3.5 text-amber-400" />
-                  Mobile Number (Optional for Card)
+                  Mobile Money Phone Number (For Prompt)
                 </span>
-                <span className="text-[10px] text-emerald-400 font-bold">MTN / Airtel / Card</span>
+                <span className="text-[10px] text-emerald-400 font-bold">MTN / Airtel</span>
               </label>
               <input
                 type="tel"
@@ -496,33 +515,20 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               {loading ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Opening In-App Checkout...</span>
+                  <span>Connecting to Live Pesapal...</span>
                 </>
               ) : (
                 <>
                   <CreditCard className="w-4 h-4" />
-                  <span>Pay {effectiveDepositAmount.toLocaleString()} UGX (In-App Pesapal)</span>
+                  <span>Pay {effectiveDepositAmount.toLocaleString()} UGX (Live Mobile Money)</span>
                 </>
               )}
             </button>
-
-            {/* Practice Top-up */}
-            <div className="pt-1.5 border-t border-slate-800 flex items-center justify-between text-xs">
-              <span className="text-slate-400 text-[11px]">Testing Mode?</span>
-              <button
-                onClick={() => handleTestCredit(10000)}
-                disabled={loading}
-                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold text-[11px] border border-slate-700 transition flex items-center gap-1 cursor-pointer"
-              >
-                <Sparkles className="w-3 h-3" />
-                <span>+10,000 UGX Practice Top-Up</span>
-              </button>
-            </div>
           </div>
         )}
 
         {/* Tab 2: Withdraw */}
-        {activeTab === 'withdraw' && !pesapalIframeUrl && (
+        {activeTab === 'withdraw' && !pesapalCheckoutUrl && (
           <div className="space-y-3.5 overflow-y-auto custom-scrollbar flex-1 pr-1">
             <div className="space-y-1">
               <label className="text-xs font-black text-slate-300">Amount to Cashout (UGX)</label>
@@ -594,7 +600,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         )}
 
         {/* Tab 3: History */}
-        {activeTab === 'history' && !pesapalIframeUrl && (
+        {activeTab === 'history' && !pesapalCheckoutUrl && (
           <div className="space-y-2 overflow-y-auto custom-scrollbar flex-1 pr-1">
             {transactionsLoading ? (
               <div className="py-8 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
