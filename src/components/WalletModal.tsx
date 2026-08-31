@@ -5,17 +5,17 @@ import {
   ArrowUpRight,
   ArrowDownLeft,
   History,
-  CreditCard,
   Phone,
   CheckCircle2,
   AlertCircle,
   X,
-  ExternalLink,
   Sparkles,
   RefreshCw,
-  Coins,
   ShieldCheck,
-  Clock,
+  Smartphone,
+  Check,
+  Send,
+  Zap,
 } from 'lucide-react';
 
 interface WalletModalProps {
@@ -37,34 +37,46 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [depositAmount, setDepositAmount] = useState<number>(5000);
   const [customAmount, setCustomAmount] = useState<string>('');
   const [phoneNumber, setPhoneNumber] = useState<string>('');
-  const [provider, setProvider] = useState<'mtn' | 'airtel' | 'card'>('mtn');
-  const [email, setEmail] = useState<string>('');
+  const [provider, setProvider] = useState<'mtn' | 'airtel'>('mtn');
 
   const [loading, setLoading] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [transactionsLoading, setTransactionsLoading] = useState<boolean>(false);
 
-  // In-app embedded Pesapal Checkout frame state
-  const [inAppCheckoutUrl, setInAppCheckoutUrl] = useState<string | null>(null);
-  const [activeOrderTrackingId, setActiveOrderTrackingId] = useState<string | null>(null);
-  const [activeMerchantRef, setActiveMerchantRef] = useState<string | null>(null);
+  // Active Yo! Payments direct USSD push state
+  const [activeTxRef, setActiveTxRef] = useState<string | null>(null);
+  const [activeExtRef, setActiveExtRef] = useState<string | null>(null);
+  const [promptSentPhone, setPromptSentPhone] = useState<string | null>(null);
+  const [isAwaitingPin, setIsAwaitingPin] = useState<boolean>(false);
 
-  // Pesapal Configuration details
-  const [pesapalConfig, setPesapalConfig] = useState<{ configured: boolean; environment: string; currency: string } | null>(null);
+  // Yo! Payments config
+  const [yoConfig, setYoConfig] = useState<{ configured: boolean; environment: string; currency: string } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
-      fetchPesapalConfig();
+      fetchYoConfig();
       fetchTransactions();
     } else {
-      setInAppCheckoutUrl(null);
-      setActiveOrderTrackingId(null);
-      setActiveMerchantRef(null);
+      setIsAwaitingPin(false);
+      setActiveTxRef(null);
+      setActiveExtRef(null);
+      setPromptSentPhone(null);
     }
   }, [isOpen, currentUser.id]);
 
-  // Safe JSON fetcher to prevent HTML/Doctype parse crashes on static hosts
+  // Automatically detect provider from phone number
+  const handlePhoneChange = (val: string) => {
+    setPhoneNumber(val);
+    const clean = val.replace(/[\s\-\+]/g, '');
+    if (clean.startsWith('077') || clean.startsWith('078') || clean.startsWith('076') || clean.startsWith('25677') || clean.startsWith('25678') || clean.startsWith('25676')) {
+      setProvider('mtn');
+    } else if (clean.startsWith('070') || clean.startsWith('075') || clean.startsWith('074') || clean.startsWith('25670') || clean.startsWith('25675') || clean.startsWith('25674')) {
+      setProvider('airtel');
+    }
+  };
+
+  // Safe JSON fetcher
   const safeFetchJson = async (url: string, options?: RequestInit) => {
     try {
       const res = await fetch(url, options);
@@ -72,15 +84,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       try {
         const json = JSON.parse(text);
         return { ok: res.ok, status: res.status, data: json };
-      } catch (parseErr) {
+      } catch {
         if (text.includes('<!DOCTYPE') || text.includes('<html')) {
           return {
             ok: false,
             status: res.status,
             data: {
               success: false,
-              message:
-                'Static hosting detected: This deployment appears to be on a static CDN (like Netlify) without the Node.js API backend running. Please run or connect to the full-stack server (Node/Cloud Run) to execute live Pesapal transactions.',
+              message: 'Static hosting mode: Connect to full-stack server to process live Mobile Money.',
               isStaticHost: true,
             },
           };
@@ -100,14 +111,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     }
   };
 
-  const fetchPesapalConfig = async () => {
+  const fetchYoConfig = async () => {
     try {
-      const res = await safeFetchJson('/api/pesapal/config-status');
+      const res = await safeFetchJson('/api/yo/config-status');
       if (res.ok && res.data) {
-        setPesapalConfig(res.data);
+        setYoConfig(res.data);
       }
     } catch (e) {
-      console.error('Failed to load Pesapal config', e);
+      console.error('Failed to load Yo! Payments config', e);
     }
   };
 
@@ -129,97 +140,95 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
   const effectiveDepositAmount = customAmount ? Number(customAmount) : depositAmount;
 
-  // Handle Real/Demo Pesapal Deposit Initiation
-  const handleInitiateDeposit = async () => {
+  // Handle Yo! Payments Instant Mobile Money Push Deposit (acdepositfunds)
+  const handleInitiateYoDeposit = async () => {
     if (!effectiveDepositAmount || effectiveDepositAmount < 500) {
       setStatusMessage({ type: 'error', text: 'Minimum deposit is 500 UGX' });
       return;
     }
 
+    if (!phoneNumber || phoneNumber.trim().length < 9) {
+      setStatusMessage({ type: 'error', text: 'Please enter your MTN or Airtel Mobile Money phone number' });
+      return;
+    }
+
     setLoading(true);
-    setStatusMessage({ type: 'info', text: 'Connecting to Pesapal Payment Gateway...' });
+    setStatusMessage({ type: 'info', text: 'Dispatching instant USSD PIN Prompt to your phone...' });
 
     try {
-      const res = await safeFetchJson('/api/pesapal/initiate-deposit', {
+      const res = await safeFetchJson('/api/yo/initiate-deposit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: currentUser.id,
+          username: currentUser.username,
           amount: effectiveDepositAmount,
-          currency: 'UGX',
-          phoneNumber: phoneNumber || undefined,
-          email: email || `${currentUser.username.toLowerCase().replace(/\s+/g, '')}@checkers.ug`,
-          description: `Checkers Arena Deposit - ${effectiveDepositAmount.toLocaleString()} UGX`,
+          phoneNumber: phoneNumber.trim(),
+          description: `Deposit ${effectiveDepositAmount.toLocaleString()} UGX into Checkers Arena`,
         }),
       });
 
       const data = res.data;
 
       if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Failed to initiate deposit');
+        throw new Error(data.message || 'Failed to initiate Yo! Payments Mobile Money deposit.');
       }
+
+      setIsAwaitingPin(true);
+      setActiveTxRef(data.transactionReference || null);
+      setActiveExtRef(data.externalReference || null);
+      setPromptSentPhone(phoneNumber.trim());
 
       setStatusMessage({
         type: 'info',
-        text: 'Pesapal secure checkout ready! Complete payment below.',
+        text: `USSD PIN Prompt sent to ${phoneNumber.trim()}. Please look at your phone screen and enter your Mobile Money PIN.`,
       });
 
-      // Display in-app embedded Pesapal Checkout frame
-      if (data.redirectUrl) {
-        setInAppCheckoutUrl(data.redirectUrl);
-        setActiveOrderTrackingId(data.orderTrackingId || null);
-        setActiveMerchantRef(data.merchantReference || null);
-      }
+      // Start polling for PIN authorization status
+      const txRef = data.transactionReference;
+      const extRef = data.externalReference;
 
-      // Listen for message from iframe or popup
-      const handlePaymentMessage = async (e: MessageEvent) => {
-        if (e.data?.type === 'PESAPAL_PAYMENT_SUCCESS' || e.data?.status === 'COMPLETED') {
-          window.removeEventListener('message', handlePaymentMessage);
-          await checkPaymentStatus(data.orderTrackingId, data.merchantReference);
-        }
-      };
-      window.addEventListener('message', handlePaymentMessage);
-
-      // Poll payment status every 3 seconds while in-app checkout is active
       const interval = setInterval(async () => {
-        const isDone = await checkPaymentStatus(data.orderTrackingId, data.merchantReference);
+        const isDone = await checkYoPaymentStatus(txRef, extRef);
         if (isDone) {
           clearInterval(interval);
-          window.removeEventListener('message', handlePaymentMessage);
-          setInAppCheckoutUrl(null);
+          setIsAwaitingPin(false);
         }
-      }, 3000);
+      }, 2500);
 
-      setTimeout(() => clearInterval(interval), 180000); // 3 minute timeout
+      setTimeout(() => clearInterval(interval), 180000); // 3-minute poll window
     } catch (err: any) {
-      setStatusMessage({ type: 'error', text: err.message || 'Deposit initiation failed. Please try again.' });
+      setStatusMessage({ type: 'error', text: err.message || 'Deposit initiation failed. Please check your number.' });
+      setIsAwaitingPin(false);
     } finally {
       setLoading(false);
     }
   };
 
-  const checkPaymentStatus = async (orderTrackingId?: string, merchantReference?: string): Promise<boolean> => {
+  // Check Yo! Payments Transaction Status
+  const checkYoPaymentStatus = async (txRef?: string | null, extRef?: string | null): Promise<boolean> => {
     try {
-      const url = `/api/pesapal/verify-status?userId=${currentUser.id}&orderTrackingId=${orderTrackingId || ''}&merchantReference=${merchantReference || ''}`;
+      const url = `/api/yo/verify-status?userId=${currentUser.id}&transactionReference=${encodeURIComponent(txRef || '')}&externalReference=${encodeURIComponent(extRef || '')}`;
       const res = await safeFetchJson(url);
       const data = res.data;
 
       if (data && data.completed) {
         setStatusMessage({
           type: 'success',
-          text: `Payment Successful! ${data.amount.toLocaleString()} UGX has been credited to your wallet.`,
+          text: `Payment Confirmed! ${data.amount.toLocaleString()} UGX has been credited to your wallet.`,
         });
         onBalanceUpdated(data.walletBalance);
         fetchTransactions();
+        setIsAwaitingPin(false);
         return true;
       }
       return false;
-    } catch (e) {
+    } catch {
       return false;
     }
   };
 
-  // Instant Practice Top-Up for testing/demo
+  // Instant Practice Top-Up
   const handleTestCredit = async (amountToAdd: number) => {
     setLoading(true);
     try {
@@ -237,7 +246,6 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         onBalanceUpdated(data.walletBalance);
         fetchTransactions();
       } else {
-        // Fallback for static demo client
         const newBal = (currentUser.walletBalance || 0) + amountToAdd;
         onBalanceUpdated(newBal);
         setStatusMessage({
@@ -254,7 +262,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     }
   };
 
-  // Handle Withdrawal Request
+  // Handle Withdrawal Request via Yo! Payments Mobile Money
   const handleWithdraw = async () => {
     const amt = effectiveDepositAmount;
     if (!amt || amt < 500) {
@@ -265,8 +273,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       setStatusMessage({ type: 'error', text: 'Insufficient balance to withdraw this amount' });
       return;
     }
-    if (!phoneNumber || phoneNumber.length < 8) {
-      setStatusMessage({ type: 'error', text: 'Please enter a valid Mobile Money phone number' });
+    if (!phoneNumber || phoneNumber.trim().length < 9) {
+      setStatusMessage({ type: 'error', text: 'Please enter a valid MTN or Airtel Mobile Money phone number' });
       return;
     }
 
@@ -278,20 +286,20 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         body: JSON.stringify({
           userId: currentUser.id,
           amount: amt,
-          phoneNumber,
-          provider: provider === 'mtn' ? 'MTN MoMo' : 'Airtel Money',
+          phoneNumber: phoneNumber.trim(),
+          provider: provider === 'mtn' ? 'MTN Mobile Money' : 'Airtel Money',
         }),
       });
       const data = res.data;
       if (res.ok && data && data.success) {
         setStatusMessage({
           type: 'success',
-          text: `Withdrawal of ${amt.toLocaleString()} UGX submitted successfully!`,
+          text: `Withdrawal of ${amt.toLocaleString()} UGX processed successfully to ${phoneNumber.trim()}!`,
         });
         onBalanceUpdated(data.walletBalance);
         fetchTransactions();
       } else {
-        setStatusMessage({ type: 'error', text: data?.message || 'Withdrawal failed' });
+        setStatusMessage({ type: 'error', text: data?.message || 'Withdrawal failed. Please check your balance.' });
       }
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message || 'Withdrawal failed' });
@@ -314,14 +322,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         {/* Modal Header & Current Balance Card */}
         <div className="space-y-3 shrink-0">
           <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-500 to-rose-600 flex items-center justify-center text-slate-950 shadow-md">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-500 to-emerald-500 flex items-center justify-center text-slate-950 shadow-md">
               <Wallet className="w-5 h-5 font-black" />
             </div>
             <div>
               <h2 className="text-lg sm:text-xl font-black text-white">Checkers Wallet</h2>
               <p className="text-xs text-amber-400 font-semibold flex items-center gap-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                Pesapal Secure Payments ({pesapalConfig?.environment === 'live' ? 'Live Gateway' : 'Sandbox / Demo'})
+                Yo! Payments Uganda Direct Mobile Money
               </p>
             </div>
           </div>
@@ -356,7 +364,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               setActiveTab('deposit');
               setStatusMessage(null);
             }}
-            className={`flex-1 py-2 rounded-lg font-black text-xs transition flex items-center justify-center gap-1.5 ${
+            className={`flex-1 py-2 rounded-lg font-black text-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
               activeTab === 'deposit'
                 ? 'bg-amber-500 text-slate-950 shadow'
                 : 'text-slate-400 hover:text-slate-200'
@@ -369,7 +377,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               setActiveTab('withdraw');
               setStatusMessage(null);
             }}
-            className={`flex-1 py-2 rounded-lg font-black text-xs transition flex items-center justify-center gap-1.5 ${
+            className={`flex-1 py-2 rounded-lg font-black text-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
               activeTab === 'withdraw'
                 ? 'bg-amber-500 text-slate-950 shadow'
                 : 'text-slate-400 hover:text-slate-200'
@@ -383,7 +391,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               setStatusMessage(null);
               fetchTransactions();
             }}
-            className={`flex-1 py-2 rounded-lg font-black text-xs transition flex items-center justify-center gap-1.5 ${
+            className={`flex-1 py-2 rounded-lg font-black text-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
               activeTab === 'history'
                 ? 'bg-amber-500 text-slate-950 shadow'
                 : 'text-slate-400 hover:text-slate-200'
@@ -394,7 +402,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         </div>
 
         {/* Feedback Messages */}
-        {statusMessage && (
+        {statusMessage && !isAwaitingPin && (
           <div
             className={`p-2.5 rounded-xl text-xs font-bold flex items-center gap-2 border ${
               statusMessage.type === 'success'
@@ -415,97 +423,69 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           </div>
         )}
 
-        {/* Tab 1: Pesapal Deposit */}
+        {/* Tab 1: Yo! Payments Deposit */}
         {activeTab === 'deposit' && (
           <div className="space-y-3.5 overflow-y-auto custom-scrollbar flex-1 pr-1">
-            {inAppCheckoutUrl ? (
-              <div className="space-y-3">
-                {/* Header & Controls */}
-                <div className="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-amber-500/40 shadow-md">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                    <span className="text-xs font-black text-amber-300">
-                      Pesapal Mobile Money Gateway
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setInAppCheckoutUrl(null);
-                      if (activeOrderTrackingId || activeMerchantRef) {
-                        checkPaymentStatus(activeOrderTrackingId || undefined, activeMerchantRef || undefined);
-                      }
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-bold transition cursor-pointer"
-                  >
-                    Close Frame
-                  </button>
-                </div>
-
-                {/* Big Action Button for Mobile Devices */}
-                <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/20 to-red-500/10 border border-amber-500/40 rounded-2xl p-3.5 space-y-2.5">
-                  <div className="flex items-start gap-2.5">
-                    <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
-                      <Phone className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-black text-white">
-                        Why hasn't the PIN prompt appeared on your phone yet?
-                      </h4>
-                      <p className="text-[11px] text-slate-300 leading-relaxed mt-0.5">
-                        Pesapal requires you to <strong>confirm your network (MTN or Airtel) and tap "Pay"</strong> in the Pesapal window before telecom sends the USSD PIN prompt to your screen.
-                      </p>
+            {isAwaitingPin ? (
+              /* Waiting for Phone USSD PIN Approval View */
+              <div className="space-y-4 py-2">
+                <div className="bg-gradient-to-b from-amber-500/10 via-slate-900 to-slate-950 border-2 border-amber-500/50 rounded-3xl p-5 text-center space-y-3 shadow-xl">
+                  <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
+                    <div className="absolute inset-0 rounded-full bg-amber-400/20 animate-ping" />
+                    <div className="w-14 h-14 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center shadow-lg">
+                      <Smartphone className="w-7 h-7 animate-bounce" />
                     </div>
                   </div>
 
-                  <a
-                    href={inAppCheckoutUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black text-xs shadow-lg transition flex items-center justify-center gap-2 cursor-pointer active:scale-98"
-                  >
-                    <ExternalLink className="w-4 h-4 text-slate-950" />
-                    <span>Launch Pesapal Gateway to Send Phone Prompt</span>
-                  </a>
-                </div>
+                  <div className="space-y-1">
+                    <h3 className="text-base font-black text-white">
+                      PIN Prompt Sent to Your Phone!
+                    </h3>
+                    <p className="text-xs text-amber-300 font-bold">
+                      {promptSentPhone} • {provider === 'mtn' ? 'MTN MoMo' : 'Airtel Money'}
+                    </p>
+                  </div>
 
-                {/* Embedded Checkout Frame */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between text-[11px] text-slate-400 px-1 font-semibold">
-                    <span>Or complete payment inside the frame below:</span>
-                    <span className="text-emerald-400">256-bit Encrypted</span>
+                  <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-3 text-left space-y-2 text-xs">
+                    <div className="flex items-center gap-2 text-emerald-400 font-black">
+                      <Zap className="w-4 h-4" />
+                      <span>Action Required on Handset:</span>
+                    </div>
+                    <ol className="list-decimal list-inside text-slate-300 space-y-1 text-[11px] font-medium">
+                      <li>Check your phone screen for the <strong className="text-white">Mobile Money PIN prompt</strong>.</li>
+                      <li>Enter your PIN to authorize <strong className="text-amber-400">{effectiveDepositAmount.toLocaleString()} UGX</strong>.</li>
+                      <li>Your wallet updates instantly upon approval!</li>
+                    </ol>
                   </div>
-                  <div className="relative w-full h-[460px] sm:h-[500px] rounded-2xl overflow-hidden border-2 border-slate-700 bg-white shadow-2xl">
-                    <iframe
-                      src={inAppCheckoutUrl}
-                      title="Pesapal Payment Gateway"
-                      className="w-full h-full border-0 bg-white"
-                      allow="payment *; clipboard-write *"
-                      sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-top-navigation-by-user-activation allow-modals"
-                    />
-                  </div>
-                </div>
 
-                {/* Live Polling Status & Actions */}
-                <div className="flex items-center justify-between bg-slate-950/90 p-2.5 rounded-xl border border-slate-800 text-xs">
-                  <div className="flex items-center gap-1.5 text-slate-400 text-[11px]">
-                    <Clock className="w-3.5 h-3.5 text-amber-400 animate-spin" />
-                    <span>Waiting for your PIN approval...</span>
+                  <div className="pt-2 flex flex-col gap-2">
+                    <button
+                      onClick={() => checkYoPaymentStatus(activeTxRef, activeExtRef)}
+                      className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs shadow-lg transition flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                    >
+                      <Check className="w-4 h-4" />
+                      <span>I Have Entered My PIN (Check Status)</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setIsAwaitingPin(false);
+                        setStatusMessage(null);
+                      }}
+                      className="text-[11px] text-slate-400 hover:text-slate-200 underline font-semibold transition cursor-pointer"
+                    >
+                      Change Number / Resend Prompt
+                    </button>
                   </div>
-                  <button
-                    onClick={() => checkPaymentStatus(activeOrderTrackingId || undefined, activeMerchantRef || undefined)}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                    <span>I have entered my PIN</span>
-                  </button>
                 </div>
               </div>
             ) : (
+              /* Normal Deposit Form */
               <>
                 <div className="space-y-1.5">
                   <label className="text-xs font-black text-slate-300 flex items-center justify-between">
                     <span>Select Stake Deposit Amount (UGX)</span>
-                    <span className="text-[10px] text-amber-400">Match Lobby Stakes</span>
+                    <span className="text-[10px] text-amber-400 font-bold">Match Lobby Stakes</span>
                   </label>
 
                   {/* Preset Stakes buttons: 500, 1000, 2000, 5000, 10000, 20000 */}
@@ -542,78 +522,78 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   </div>
                 </div>
 
-                {/* Payment Method / Provider */}
+                {/* Network Provider Selection */}
                 <div className="space-y-1.5">
-                  <label className="text-xs font-black text-slate-300">Payment Method via Pesapal</label>
-                  <div className="grid grid-cols-3 gap-2">
+                  <label className="text-xs font-black text-slate-300">Select Mobile Money Network</label>
+                  <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       onClick={() => setProvider('mtn')}
-                      className={`py-2 px-2 rounded-xl text-xs font-bold border transition flex flex-col items-center gap-1 cursor-pointer ${
+                      className={`py-2.5 px-3 rounded-xl text-xs font-black border transition flex items-center justify-center gap-2 cursor-pointer ${
                         provider === 'mtn'
-                          ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                          ? 'bg-amber-500/25 border-amber-400 text-amber-300 shadow-md ring-1 ring-amber-400'
                           : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                       }`}
                     >
-                      <Phone className="w-3.5 h-3.5 text-amber-400" />
+                      <Phone className="w-4 h-4 text-amber-400" />
                       <span>MTN MoMo</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => setProvider('airtel')}
-                      className={`py-2 px-2 rounded-xl text-xs font-bold border transition flex flex-col items-center gap-1 cursor-pointer ${
+                      className={`py-2.5 px-3 rounded-xl text-xs font-black border transition flex items-center justify-center gap-2 cursor-pointer ${
                         provider === 'airtel'
-                          ? 'bg-rose-500/20 border-rose-400 text-rose-300'
+                          ? 'bg-rose-500/25 border-rose-400 text-rose-300 shadow-md ring-1 ring-rose-400'
                           : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                       }`}
                     >
-                      <Phone className="w-3.5 h-3.5 text-rose-400" />
+                      <Phone className="w-4 h-4 text-rose-400" />
                       <span>Airtel Money</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setProvider('card')}
-                      className={`py-2 px-2 rounded-xl text-xs font-bold border transition flex flex-col items-center gap-1 cursor-pointer ${
-                        provider === 'card'
-                          ? 'bg-sky-500/20 border-sky-400 text-sky-300'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                      }`}
-                    >
-                      <CreditCard className="w-3.5 h-3.5 text-sky-400" />
-                      <span>Visa/Mastercard</span>
                     </button>
                   </div>
                 </div>
 
                 {/* Mobile Money Phone Input */}
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-300">
-                    Phone Number (for Mobile Money Prompt)
+                  <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
+                    <span>Your {provider === 'mtn' ? 'MTN' : 'Airtel'} Phone Number</span>
+                    <span className="text-[10px] text-emerald-400 font-bold">Direct Instant Push</span>
                   </label>
-                  <input
-                    type="tel"
-                    placeholder="e.g. 0771234567 or +256701234567"
-                    value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs font-bold focus:outline-none focus:border-amber-400"
-                  />
+                  <div className="relative">
+                    <input
+                      type="tel"
+                      placeholder="e.g. 0771234567 or 0701234567"
+                      value={phoneNumber}
+                      onChange={(e) => handlePhoneChange(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs font-bold focus:outline-none focus:border-amber-400"
+                    />
+                    <Smartphone className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                  </div>
+                  <p className="text-[10px] text-slate-400 font-medium">
+                    The USSD PIN prompt will popup instantly on this phone screen.
+                  </p>
                 </div>
 
-                {/* Submit Pesapal Deposit */}
+                {/* Submit Yo! Payments Deposit Button */}
                 <button
-                  onClick={handleInitiateDeposit}
-                  disabled={loading || effectiveDepositAmount < 500}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-red-600 hover:from-amber-400 hover:to-red-500 text-slate-950 font-black text-xs shadow-lg transition active:scale-98 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+                  onClick={handleInitiateYoDeposit}
+                  disabled={loading || effectiveDepositAmount < 500 || !phoneNumber}
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-emerald-500 hover:from-amber-400 hover:to-emerald-400 text-slate-950 font-black text-xs shadow-lg transition active:scale-98 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
                 >
-                  <Wallet className="w-4 h-4" />
-                  <span>
-                    {loading
-                      ? 'Connecting to Pesapal...'
-                      : `Pay ${effectiveDepositAmount.toLocaleString()} UGX with Pesapal`}
-                  </span>
+                  {loading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Sending PIN Prompt to Phone...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      <span>Send PIN Prompt for {effectiveDepositAmount.toLocaleString()} UGX</span>
+                    </>
+                  )}
                 </button>
 
-                {/* Sandbox Quick Practice Top-up */}
+                {/* Quick Practice Top-up */}
                 <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
                   <span className="text-slate-400 text-[11px]">Testing Arena?</span>
                   <button
@@ -622,7 +602,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold text-[11px] border border-slate-700 transition flex items-center gap-1 cursor-pointer"
                   >
                     <Sparkles className="w-3 h-3" />
-                    <span>+10,000 UGX Sandbox Credit</span>
+                    <span>+10,000 UGX Practice Top-Up</span>
                   </button>
                 </div>
               </>
@@ -643,11 +623,41 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   setDepositAmount(Number(e.target.value));
                   setCustomAmount(e.target.value);
                 }}
-                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs font-bold focus:outline-none focus:border-amber-400"
+                className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs font-bold focus:outline-none focus:border-amber-400"
               />
               <p className="text-[10px] text-slate-400">
                 Max available: {(currentUser.walletBalance || 0).toLocaleString()} UGX
               </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-black text-slate-300">Payout Network</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setProvider('mtn')}
+                  className={`py-2 px-3 rounded-xl text-xs font-bold border transition flex items-center justify-center gap-2 cursor-pointer ${
+                    provider === 'mtn'
+                      ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  <Phone className="w-3.5 h-3.5 text-amber-400" />
+                  <span>MTN MoMo</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProvider('airtel')}
+                  className={`py-2 px-3 rounded-xl text-xs font-bold border transition flex items-center justify-center gap-2 cursor-pointer ${
+                    provider === 'airtel'
+                      ? 'bg-rose-500/20 border-rose-400 text-rose-300'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  <Phone className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Airtel Money</span>
+                </button>
+              </div>
             </div>
 
             <div className="space-y-1">
@@ -656,20 +666,20 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               </label>
               <input
                 type="tel"
-                placeholder="e.g. 0770000000"
+                placeholder="e.g. 0770000000 or 0700000000"
                 value={phoneNumber}
-                onChange={(e) => setPhoneNumber(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs font-bold focus:outline-none focus:border-amber-400"
+                onChange={(e) => handlePhoneChange(e.target.value)}
+                className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs font-bold focus:outline-none focus:border-amber-400"
               />
             </div>
 
             <button
               onClick={handleWithdraw}
-              disabled={loading || (currentUser.walletBalance || 0) < 500}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs shadow-lg transition active:scale-98 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+              disabled={loading || (currentUser.walletBalance || 0) < 500 || !phoneNumber}
+              className="w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs shadow-lg transition active:scale-98 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
             >
               <ArrowUpRight className="w-4 h-4" />
-              <span>Withdraw Funds</span>
+              <span>Withdraw via Yo! Payments Mobile Money</span>
             </button>
           </div>
         )}
@@ -714,7 +724,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       UGX
                     </div>
                     <span
-                      className={`text-[9px] font-black uppercase px-1.5 py-0.2 rounded ${
+                      className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${
                         tx.status === 'completed'
                           ? 'bg-emerald-950 text-emerald-400'
                           : tx.status === 'pending'

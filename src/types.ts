@@ -49,6 +49,7 @@ export interface WalletTransaction {
   status: 'completed' | 'pending' | 'failed';
   description: string;
   reference?: string;
+  transactionReference?: string;
   pesapalTrackingId?: string;
   roomId?: string;
   timestamp: number;
@@ -213,6 +214,17 @@ export interface Challenge {
   stakeAmount: number; // 0 for free, or specific stake tier
   createdAt: number;
   status: 'pending' | 'accepted' | 'declined' | 'expired';
+}
+
+export interface YoPaymentInitResponse {
+  success: boolean;
+  status: string;
+  transactionReference?: string;
+  externalReference?: string;
+  amount: number;
+  currency: string;
+  message?: string;
+  isSandboxDemo?: boolean;
 }
 
 export interface PesapalPaymentInitResponse {
