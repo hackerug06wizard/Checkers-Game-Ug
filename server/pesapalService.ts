@@ -52,10 +52,13 @@ class PesapalService {
   private ipnId: string | null = null;
 
   public getConfig(): PesapalConfig {
+    const rawEnv = (process.env.PESAPAL_ENVIRONMENT || 'live').toLowerCase();
+    const environment: 'live' | 'sandbox' = rawEnv === 'sandbox' ? 'sandbox' : 'live';
+
     return {
       consumerKey: process.env.PESAPAL_CONSUMER_KEY || 'YdD5wiLJ3zCiIijV3Wb2xnV+7Sjugby+',
       consumerSecret: process.env.PESAPAL_CONSUMER_SECRET || 'q/nU5o64KI8OW8pDUIgl4BV9VI4=',
-      environment: 'live', // Strict Live Production Mode for real mobile prompt payments
+      environment,
       currency: process.env.PESAPAL_CURRENCY || 'UGX',
       ipnId: process.env.PESAPAL_IPN_ID || '',
     };
@@ -66,6 +69,13 @@ class PesapalService {
     return config.environment === 'sandbox'
       ? 'https://cybqa.pesapal.com/pesapalv3/api'
       : 'https://pay.pesapal.com/v3/api';
+  }
+
+  public getIframeBaseUrl(): string {
+    const config = this.getConfig();
+    return config.environment === 'sandbox'
+      ? 'https://cybqa.pesapal.com/pesapaliframe/PesapalIframe3/Index'
+      : 'https://pay.pesapal.com/iframe/PesapalIframe3/Index';
   }
 
   public isConfigured(): boolean {
@@ -90,7 +100,7 @@ class PesapalService {
 
     try {
       const url = `${this.getBaseUrl()}/Auth/RequestToken`;
-      console.log(`[Pesapal Live] Requesting auth token from ${url}...`);
+      console.log(`[Pesapal] Requesting auth token from ${url} (${config.environment})...`);
 
       const response = await fetch(url, {
         method: 'POST',
@@ -106,26 +116,60 @@ class PesapalService {
 
       if (!response.ok) {
         const errText = await response.text();
-        console.error(`[Pesapal Live] Auth Token request failed (${response.status}):`, errText);
+        console.error(`[Pesapal] Auth Token request failed (${response.status}):`, errText);
         return null;
       }
 
-      const data = (await response.json()) as { token: string; expiryDate: string; status: string };
+      const data = (await response.json()) as { token: string; expiryDate: string; status: string; error?: any };
       if (data && data.token) {
         this.token = data.token;
         this.tokenExpiry = now + 4 * 60 * 1000;
-        console.log('[Pesapal Live] Auth token received successfully.');
+        console.log('[Pesapal] Auth token received successfully.');
         return this.token;
       }
       return null;
     } catch (err) {
-      console.error('[Pesapal Live] Exception requesting auth token:', err);
+      console.error('[Pesapal] Exception requesting auth token:', err);
       return null;
     }
   }
 
   /**
-   * Auto-register IPN URL if not configured
+   * Fetch registered IPN list from Pesapal
+   */
+  public async getRegisteredIpns(): Promise<Array<{ ipn_id: string; url: string }>> {
+    const token = await this.getAuthToken();
+    if (!token) return [];
+
+    try {
+      const url = `${this.getBaseUrl()}/URLSetup/GetIpnList`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          return data
+            .filter((item: any) => item && (item.ipn_id || item.notification_id))
+            .map((item: any) => ({
+              ipn_id: item.ipn_id || item.notification_id,
+              url: item.url || '',
+            }));
+        }
+      }
+    } catch (e) {
+      console.warn('[Pesapal] Could not fetch IPN list:', e);
+    }
+    return [];
+  }
+
+  /**
+   * Auto-register or fetch existing IPN URL
    */
   public async getOrRegisterIpnId(appBaseUrl: string): Promise<string | null> {
     const config = this.getConfig();
@@ -154,10 +198,24 @@ class PesapalService {
     const token = await this.getAuthToken();
     if (!token) return null;
 
+    // 1. Check existing IPN list first
+    const existingList = await this.getRegisteredIpns();
+    if (existingList.length > 0) {
+      // Prefer matching URL or use the first available IPN
+      const match = existingList.find((item) => item.url && item.url.includes('/api/pesapal/ipn')) || existingList[0];
+      if (match && match.ipn_id) {
+        this.ipnId = match.ipn_id;
+        console.log(`[Pesapal] Reusing existing IPN ID: ${this.ipnId}`);
+        return this.ipnId;
+      }
+    }
+
+    // 2. Register new IPN if none found
     try {
-      const ipnCallbackUrl = `${appBaseUrl.replace(/\/$/, '')}/api/pesapal/ipn`;
+      const cleanBase = appBaseUrl ? appBaseUrl.replace(/\/$/, '') : 'https://checkersarena-beta.vercel.app';
+      const ipnCallbackUrl = `${cleanBase}/api/pesapal/ipn`;
       const url = `${this.getBaseUrl()}/URLSetup/RegisterIPN`;
-      console.log(`[Pesapal Live] Registering IPN URL: ${ipnCallbackUrl}`);
+      console.log(`[Pesapal] Registering IPN URL: ${ipnCallbackUrl}`);
 
       const response = await fetch(url, {
         method: 'POST',
@@ -172,45 +230,56 @@ class PesapalService {
         }),
       });
 
-      if (!response.ok) {
+      if (response.ok) {
+        const data = (await response.json()) as { ipn_id: string; status: string };
+        if (data && data.ipn_id) {
+          this.ipnId = data.ipn_id;
+          try {
+            const dir = path.dirname(IPN_CACHE_FILE);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(IPN_CACHE_FILE, JSON.stringify({ ipn_id: data.ipn_id, registeredAt: Date.now() }), 'utf-8');
+          } catch (err) {
+            console.warn('[Pesapal] Could not save IPN cache file:', err);
+          }
+          console.log(`[Pesapal] IPN registered successfully! IPN ID: ${data.ipn_id}`);
+          return this.ipnId;
+        }
+      } else {
         const errText = await response.text();
-        console.error('[Pesapal Live] IPN Registration failed:', errText);
-        return null;
+        console.warn('[Pesapal] RegisterIPN response:', errText);
       }
 
-      const data = (await response.json()) as { ipn_id: string; status: string };
-      if (data && data.ipn_id) {
-        this.ipnId = data.ipn_id;
-        try {
-          const dir = path.dirname(IPN_CACHE_FILE);
-          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(IPN_CACHE_FILE, JSON.stringify({ ipn_id: data.ipn_id, registeredAt: Date.now() }), 'utf-8');
-        } catch (err) {
-          console.warn('[Pesapal] Could not save IPN cache file:', err);
-        }
-        console.log(`[Pesapal Live] IPN registered successfully! IPN ID: ${data.ipn_id}`);
+      // Retry fetching list in case it was created concurrently
+      const listAfter = await this.getRegisteredIpns();
+      if (listAfter.length > 0 && listAfter[0].ipn_id) {
+        this.ipnId = listAfter[0].ipn_id;
         return this.ipnId;
       }
+
       return null;
     } catch (err) {
-      console.error('[Pesapal Live] Exception registering IPN:', err);
+      console.error('[Pesapal] Exception registering IPN:', err);
       return null;
     }
   }
 
   /**
-   * Submit Order Request to Pesapal Live v3
+   * Submit Order Request to Pesapal v3
    */
   public async submitOrder(params: PesapalOrderParams, appBaseUrl: string): Promise<PesapalOrderResult> {
     const config = this.getConfig();
     const token = await this.getAuthToken();
 
     if (!token) {
-      throw new Error('Pesapal Live Authentication failed. Please verify Consumer Key & Consumer Secret.');
+      throw new Error('Pesapal Authentication failed. Please check your Consumer Key & Secret.');
     }
 
     const merchantRef = `CHK_DEP_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
     const ipnId = await this.getOrRegisterIpnId(appBaseUrl);
+
+    if (!ipnId) {
+      console.warn('[Pesapal] IPN registration not found, attempting fallback order submission...');
+    }
 
     const url = `${this.getBaseUrl()}/Transactions/SubmitOrderRequest`;
     const currency = params.currency || config.currency || 'UGX';
@@ -226,6 +295,9 @@ class PesapalService {
       phone = '256794915844';
     }
 
+    const cleanUsername = (params.username || 'Player').replace(/[^a-zA-Z0-9]/g, '') || 'Player';
+    const email = params.email || `${cleanUsername.toLowerCase()}@checkersarena.ug`;
+
     const payload: any = {
       id: merchantRef,
       currency: currency,
@@ -233,11 +305,18 @@ class PesapalService {
       description: params.description || `Checkers Arena Deposit (${params.amount} ${currency})`,
       callback_url: params.callbackUrl,
       billing_address: {
-        email_address: params.email || `${params.username.toLowerCase().replace(/[^a-z0-9]/g, '') || 'player'}@checkersarena.ug`,
+        email_address: email,
         phone_number: phone,
         country_code: 'UG',
-        first_name: params.username || 'Checkers',
-        last_name: 'Player',
+        first_name: cleanUsername,
+        middle_name: '',
+        last_name: 'Arena',
+        line_1: 'Kampala Road',
+        line_2: '',
+        city: 'Kampala',
+        state: 'Central',
+        postal_code: '10101',
+        zip_code: '10101',
       },
     };
 
@@ -245,7 +324,7 @@ class PesapalService {
       payload.notification_id = ipnId;
     }
 
-    console.log(`[Pesapal Live] Submitting real order to ${url}:`, JSON.stringify(payload, null, 2));
+    console.log(`[Pesapal] Submitting order to ${url}:`, JSON.stringify(payload, null, 2));
 
     const response = await fetch(url, {
       method: 'POST',
@@ -257,24 +336,50 @@ class PesapalService {
       body: JSON.stringify(payload),
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`[Pesapal Live] Order submission failed (${response.status}):`, errText);
-      throw new Error(`Pesapal order failed (${response.status}): ${errText}`);
+    const responseText = await response.text();
+    console.log(`[Pesapal] Order submission HTTP ${response.status}:`, responseText);
+
+    let data: any = {};
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      throw new Error(`Pesapal order failed (${response.status}): ${responseText.substring(0, 150)}`);
     }
 
-    const data = (await response.json()) as PesapalOrderResult;
-    console.log('[Pesapal Live] Real order created response:', data);
-
-    if (!data || !data.redirect_url) {
-      throw new Error('Pesapal did not return a valid checkout redirect URL.');
+    if (!response.ok || (data.status && data.status !== '200' && data.status !== 200)) {
+      const errMsg =
+        (typeof data.error === 'string' ? data.error : data.error?.message) ||
+        data.message ||
+        `Pesapal API error (HTTP ${response.status})`;
+      throw new Error(errMsg);
     }
 
-    return data;
+    const orderTrackingId = data.order_tracking_id || data.orderTrackingId || data.tracking_id;
+    const returnedMerchantRef = data.merchant_reference || data.merchantReference || merchantRef;
+
+    let redirectUrl = data.redirect_url || data.redirectUrl || data.url;
+    if (!redirectUrl && orderTrackingId) {
+      redirectUrl = `${this.getIframeBaseUrl()}?OrderTrackingId=${orderTrackingId}`;
+    }
+
+    if (!redirectUrl) {
+      throw new Error(
+        data?.error?.message ||
+        data?.message ||
+        'Pesapal did not return a checkout URL. Please verify merchant credentials.'
+      );
+    }
+
+    return {
+      order_tracking_id: orderTrackingId,
+      merchant_reference: returnedMerchantRef,
+      redirect_url: redirectUrl,
+      status: String(data.status || '200'),
+    };
   }
 
   /**
-   * Get Transaction Status from Pesapal Live
+   * Get Transaction Status from Pesapal
    */
   public async getTransactionStatus(orderTrackingId: string): Promise<PesapalTransactionStatus | null> {
     const token = await this.getAuthToken();
@@ -282,7 +387,7 @@ class PesapalService {
 
     try {
       const url = `${this.getBaseUrl()}/Transactions/GetTransactionStatus?orderTrackingId=${encodeURIComponent(orderTrackingId)}`;
-      console.log(`[Pesapal Live] Querying transaction status: ${url}`);
+      console.log(`[Pesapal] Querying transaction status: ${url}`);
 
       const response = await fetch(url, {
         method: 'GET',
@@ -294,15 +399,15 @@ class PesapalService {
 
       if (!response.ok) {
         const errText = await response.text();
-        console.error(`[Pesapal Live] Status check failed (${response.status}):`, errText);
+        console.error(`[Pesapal] Status check failed (${response.status}):`, errText);
         return null;
       }
 
       const data = (await response.json()) as PesapalTransactionStatus;
-      console.log('[Pesapal Live] Transaction status result:', data);
+      console.log('[Pesapal] Transaction status result:', data);
       return data;
     } catch (err) {
-      console.error('[Pesapal Live] Exception checking status:', err);
+      console.error('[Pesapal] Exception checking status:', err);
       return null;
     }
   }

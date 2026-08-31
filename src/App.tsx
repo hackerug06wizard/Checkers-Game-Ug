@@ -21,6 +21,7 @@ import { CreateTableModal } from './components/CreateTableModal';
 import { ChallengeModal } from './components/ChallengeModal';
 import { AvatarBadge } from './components/AvatarBadge';
 import { sounds } from './lib/sound';
+import { apiFetchJson } from './lib/api';
 import {
   saveUserProfileToFirestore,
   getLeaderboardFromFirestore,
@@ -451,18 +452,38 @@ export default function App() {
       setGameRooms(rooms.filter((r) => r.status === 'waiting' || r.status === 'playing'));
     });
 
-    // Refresh saved user profile from Firestore if available
+    // Refresh saved user profile from Firestore if available & auto-clean sandbox demo funds
     try {
       const savedUserRaw = localStorage.getItem('checkers_user_profile');
       if (savedUserRaw) {
         const localUser = JSON.parse(savedUserRaw);
         if (localUser?.id) {
-          getUserProfileFromFirestore(localUser.id).then((cloudProfile) => {
-            if (cloudProfile) {
-              setCurrentUser(cloudProfile);
-              localStorage.setItem('checkers_user_profile', JSON.stringify(cloudProfile));
-            }
-          }).catch(() => {});
+          // Check if sandbox funds need one-time reset
+          const isCleaned = localStorage.getItem('checkers_sandbox_cleaned_v2') === 'true';
+          if (!isCleaned) {
+            const resetUser = {
+              ...localUser,
+              walletBalance: 0,
+              totalWon: 0,
+              totalStaked: 0,
+            };
+            setCurrentUser(resetUser);
+            localStorage.setItem('checkers_user_profile', JSON.stringify(resetUser));
+            localStorage.setItem('checkers_sandbox_cleaned_v2', 'true');
+            saveUserProfileToFirestore(resetUser).catch(() => {});
+            apiFetchJson('/api/wallet/reset-balance', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: localUser.id }),
+            }).catch(() => {});
+          } else {
+            getUserProfileFromFirestore(localUser.id).then((cloudProfile) => {
+              if (cloudProfile) {
+                setCurrentUser(cloudProfile);
+                localStorage.setItem('checkers_user_profile', JSON.stringify(cloudProfile));
+              }
+            }).catch(() => {});
+          }
         }
       }
     } catch (e) {

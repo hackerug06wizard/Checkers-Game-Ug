@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile, STAKE_TIERS, WalletTransaction } from '../types';
 import { apiFetchJson } from '../lib/api';
+import { saveUserProfileToFirestore } from '../lib/firebase';
 import {
   Wallet,
   ArrowUpRight,
@@ -14,7 +15,7 @@ import {
   ShieldCheck,
   Check,
   CreditCard,
-  Lock,
+  Trash2,
   ArrowLeft,
   ExternalLink,
   Smartphone,
@@ -45,6 +46,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [transactionsLoading, setTransactionsLoading] = useState<boolean>(false);
+  const [resettingBalance, setResettingBalance] = useState<boolean>(false);
 
   // Live Pesapal In-App & Push Checkout
   const [pesapalCheckoutUrl, setPesapalCheckoutUrl] = useState<string | null>(null);
@@ -111,6 +113,45 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     }
   };
 
+  // Reset Sandbox & Test Balances to 0 UGX
+  const handleResetSandboxBalance = async () => {
+    setResettingBalance(true);
+    try {
+      // 1. Reset on backend server
+      await apiFetchJson('/api/wallet/reset-balance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id }),
+      });
+
+      // 2. Reset in Firestore
+      const updatedProfile: UserProfile = {
+        ...currentUser,
+        walletBalance: 0,
+        totalWon: 0,
+        totalStaked: 0,
+      };
+      await saveUserProfileToFirestore(updatedProfile);
+
+      // 3. Reset in localStorage
+      localStorage.setItem('checkers_user_profile', JSON.stringify(updatedProfile));
+      localStorage.setItem('checkers_sandbox_cleaned_v2', 'true');
+
+      // 4. Update UI
+      onBalanceUpdated(0);
+      setTransactions([]);
+      setStatusMessage({
+        type: 'success',
+        text: 'Sandbox balance successfully cleared! Available balance is now 0 UGX.',
+      });
+    } catch (err: any) {
+      console.error('Failed to reset balance:', err);
+      setStatusMessage({ type: 'error', text: 'Could not reset balance. Please try again.' });
+    } finally {
+      setResettingBalance(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   const effectiveDepositAmount = customAmount ? Number(customAmount) : depositAmount;
@@ -166,7 +207,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       }, 4000);
     } catch (err: any) {
       console.error('Pesapal initiation error:', err);
-      setStatusMessage({ type: 'error', text: err.message || 'Payment initialization failed. Please check your credentials or connection.' });
+      setStatusMessage({
+        type: 'error',
+        text: err.message || 'Payment initialization failed. Please check your network or phone number.',
+      });
     } finally {
       setLoading(false);
     }
@@ -187,11 +231,18 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       const data = res.data;
 
       if (data && (data.completed || data.status === 'Completed' || data.status === 'COMPLETED')) {
+        const newBal = data.walletBalance || (currentUser.walletBalance + effectiveDepositAmount);
         setStatusMessage({
           type: 'success',
           text: `Payment Confirmed! +${effectiveDepositAmount.toLocaleString()} UGX credited to your wallet balance.`,
         });
-        onBalanceUpdated(data.walletBalance || (currentUser.walletBalance + effectiveDepositAmount));
+        onBalanceUpdated(newBal);
+
+        // Update Firestore profile with new real balance
+        const updatedProf: UserProfile = { ...currentUser, walletBalance: newBal };
+        saveUserProfileToFirestore(updatedProf).catch(() => {});
+        localStorage.setItem('checkers_user_profile', JSON.stringify(updatedProf));
+
         fetchTransactions();
         setPesapalCheckoutUrl(null);
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
@@ -240,11 +291,17 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       });
       const data = res.data;
       if (res.ok && data && data.success) {
+        const newBal = data.walletBalance;
         setStatusMessage({
           type: 'success',
           text: `Cashout of ${amt.toLocaleString()} UGX processed successfully to ${phoneNumber.trim()}!`,
         });
-        onBalanceUpdated(data.walletBalance);
+        onBalanceUpdated(newBal);
+
+        const updatedProf: UserProfile = { ...currentUser, walletBalance: newBal };
+        saveUserProfileToFirestore(updatedProf).catch(() => {});
+        localStorage.setItem('checkers_user_profile', JSON.stringify(updatedProf));
+
         fetchTransactions();
       } else {
         setStatusMessage({ type: 'error', text: data?.message || 'Withdrawal failed. Please check your balance.' });
@@ -296,13 +353,27 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               </div>
             </div>
 
-            <div className="text-right space-y-0.5">
-              <span className="text-[10px] text-emerald-400 font-bold block">
-                Won: +{(currentUser.totalWon || 0).toLocaleString()} UGX
-              </span>
-              <span className="text-[10px] text-slate-400 block">
-                Staked: {(currentUser.totalStaked || 0).toLocaleString()} UGX
-              </span>
+            <div className="text-right space-y-1.5">
+              <div className="space-y-0.5">
+                <span className="text-[10px] text-emerald-400 font-bold block">
+                  Won: +{(currentUser.totalWon || 0).toLocaleString()} UGX
+                </span>
+                <span className="text-[10px] text-slate-400 block">
+                  Staked: {(currentUser.totalStaked || 0).toLocaleString()} UGX
+                </span>
+              </div>
+              {(currentUser.walletBalance || 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={handleResetSandboxBalance}
+                  disabled={resettingBalance}
+                  className="text-[10px] px-2 py-1 rounded-lg bg-rose-950/70 border border-rose-800/80 text-rose-300 hover:bg-rose-900 hover:text-white transition flex items-center gap-1 ml-auto cursor-pointer"
+                  title="Clear old sandbox demo money"
+                >
+                  <Trash2 className="w-3 h-3 text-rose-400" />
+                  <span>{resettingBalance ? 'Clearing...' : 'Clear Sandbox (0 UGX)'}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -602,6 +673,21 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         {/* Tab 3: History */}
         {activeTab === 'history' && !pesapalCheckoutUrl && (
           <div className="space-y-2 overflow-y-auto custom-scrollbar flex-1 pr-1">
+            <div className="flex items-center justify-between pb-1">
+              <span className="text-[11px] font-bold text-slate-400">Recent Transactions</span>
+              {(currentUser.walletBalance || 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={handleResetSandboxBalance}
+                  disabled={resettingBalance}
+                  className="text-[10px] text-rose-400 hover:text-rose-300 font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Reset All to 0 UGX</span>
+                </button>
+              )}
+            </div>
+
             {transactionsLoading ? (
               <div className="py-8 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
                 <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />

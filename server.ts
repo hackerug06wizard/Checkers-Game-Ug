@@ -471,24 +471,34 @@ app.get('/api/wallet/transactions', (req, res) => {
   res.json({ success: true, transactions: userTxs });
 });
 
-// Wallet Instant Test Credit API (Safe top up for practice/testing)
-app.post('/api/wallet/test-credit', (req, res) => {
-  const { userId, amount } = req.body;
-  const parsed = Number(amount) || 10000;
+// Wallet Reset Balances API (Purge Sandbox & Mock balances)
+app.post(['/api/wallet/reset-balance', '/api/wallet/reset'], (req, res) => {
+  const { userId } = req.body;
   if (!userId) return res.status(400).json({ success: false, message: 'Missing userId' });
 
-  const updatedUser = adjustUserWallet(
-    userId,
-    parsed,
-    'deposit',
-    `Test Practice Credit (+${parsed.toLocaleString()} UGX)`,
-    { reference: `DEMO_${Date.now()}` }
-  );
+  const user = usersMap.get(userId);
+  if (user) {
+    user.walletBalance = 0;
+    user.totalWon = 0;
+    user.totalStaked = 0;
+    usersMap.set(userId, user);
+    persistUsers();
+  }
+
+  // Clear sandbox and test transactions for this user
+  for (let i = transactionsList.length - 1; i >= 0; i--) {
+    if (transactionsList[i].userId === userId) {
+      transactionsList.splice(i, 1);
+    }
+  }
+  persistTransactions();
 
   res.json({
     success: true,
-    walletBalance: updatedUser?.walletBalance || 0,
-    message: `Credited ${parsed.toLocaleString()} UGX to your wallet!`,
+    walletBalance: 0,
+    totalWon: 0,
+    totalStaked: 0,
+    message: 'Sandbox balance successfully cleared and reset to 0 UGX.',
   });
 });
 
