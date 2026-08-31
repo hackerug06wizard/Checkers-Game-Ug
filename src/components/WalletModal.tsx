@@ -90,14 +90,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         return {
           ok: false,
           status: res.status,
-          data: { success: false, message: 'Server communication error' },
+          data: { success: false, message: text && text.length < 200 ? text : `Server error (${res.status})` },
         };
       }
     } catch (networkErr: any) {
       return {
         ok: false,
         status: 0,
-        data: { success: false, message: networkErr.message || 'Network connection error' },
+        data: { success: false, message: networkErr?.message || 'Network connection error' },
       };
     }
   };

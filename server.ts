@@ -300,8 +300,8 @@ app.get('/api/pesapal/config-status', (req, res) => {
   });
 });
 
-// Pesapal Deposit Initiation API
-app.post('/api/pesapal/initiate-deposit', async (req, res) => {
+// Pesapal Deposit Initiation API (Accepts both /api/pesapal/initiate-deposit and /api/pesapal/initiate-order)
+app.post(['/api/pesapal/initiate-deposit', '/api/pesapal/initiate-order'], async (req, res) => {
   try {
     const { userId, amount, currency, email, phoneNumber, description } = req.body;
     const parsedAmount = Number(amount);
